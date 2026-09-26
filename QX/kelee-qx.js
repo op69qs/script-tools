@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.1.0 (2026-09-26)
+ * Kelee → Quantumult X install adapter, v1.2.1 (2026-09-26)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -7,7 +7,7 @@
  * One file, three jobs:
  * 1. Rewrite the hub's standard Loon installation links.
  * 2. Serve a local installation fallback/status page (script-echo-response).
- * 3. Fetch allow-listed resources using a candidate Loon UA (http_backend).
+ * 3. Fetch allow-listed resources using a published Loon UA (http_backend).
  *
  * This is an installer/download adapter, NOT a Loon engine or LPX decryptor.
  * The global resource parser still has to convert the fetched configuration.
@@ -16,11 +16,16 @@
 (function keleeQXAdapter() {
   'use strict';
 
-  // Candidate product/version string, NOT a captured/verified Loon request.
-  // If your own successful request uses a different UA, change this one value.
+  // Published iOS resource UA: https://t.me/s/LoonNews (post 2016, 2026-09-16).
+  // This is a documented example, NOT a claim about every device or site acceptance.
+  // v1.2.1 only makes remoteSnippet/adapter URLs stable (no version suffix).
+  // Upstream download is still UNVERIFIED: this session's outbound GETs failed
+  // during DNS resolution, before any HTTP response was obtained.
+  // No new UA is claimed to work; diagnostic profiles do not establish acceptance.
   var CONFIG = {
-    version: '1.1.0',
-    loonUA: 'Loon/3.5.1',
+    version: '1.2.1',
+    loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
+    accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
     backendOrigin: 'http://127.0.0.1:9999/',
     maxChars: 3 * 1024 * 1024,
@@ -217,18 +222,18 @@
   }
 
   function reply(code, body, type) {
-    var reason = {200:'OK',400:'Bad Request',404:'Not Found',405:'Method Not Allowed',502:'Bad Gateway',504:'Gateway Timeout'}[code] || 'Error';
+    var reason = {200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',405:'Method Not Allowed',429:'Too Many Requests',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable',504:'Gateway Timeout'}[code] || 'Error';
     return {status:'HTTP/1.1 ' + code + ' ' + reason, headers: {
       'Content-Type': (type || 'text/plain') + '; charset=utf-8',
       'Cache-Control': 'no-store', 'X-Content-Type-Options':'nosniff',
-      'Referrer-Policy':'no-referrer'
+      'Referrer-Policy':'no-referrer', 'X-Kelee-QX-Version': CONFIG.version
     }, body:body};
   }
   /** Native QX remote rewrite format: hostname plus rules, no INI sections. */
   function remoteSnippet() {
-    var source = CONFIG.backendOrigin + 'kelee-qx/adapter.js?v=' + encodeURIComponent(CONFIG.version);
+    var source = CONFIG.backendOrigin + 'kelee-qx/adapter.js';
     return [
-      '# Kelee-QX ' + CONFIG.version + ' - native Quantumult X rewrite resource',
+      '# Kelee-QX - native Quantumult X rewrite resource',
       '# Import this resource with opt-parser=false; retain the http_backend bootstrap.',
       '# The script URL is served by the same independently configured local backend.',
       'hostname = hub.kelee.one',
@@ -272,7 +277,7 @@
     return reply(200, page('添加到 Quantumult X', '<p>原始资源：</p><pre>' + escapeHTML(original) + '</pre>' +
       '<p><a id="open-qx" class="button" href="' + escapeHTML(qx) + '">添加到 Quantumult X</a></p>' +
       '<p>如未自动打开，请点上面的按钮。只添加资源，不替换现有配置。</p>' +
-      '<p>可莉资源由 QX 本机下载服务使用候选 Loon UA 获取；解析器负责格式转换，二者都可能单独失败。</p>' +
+      '<p>可莉资源由 QX 本机下载服务使用公布的 Loon UA 获取；解析器负责格式转换，二者都可能单独失败。</p>' +
       '<script>setTimeout(function(){window.location.href=' + jsonForScript(qx) + ';},60);</script>'), 'text/html');
   }
 
@@ -309,7 +314,7 @@
   }
   function bodyProblem(response, kind) {
     var status = Number(response.statusCode || 0);
-    if (status < 200 || status >= 300) return '上游 HTTP ' + status + '。UA 可能不足以通过，请打开诊断页。';
+    if (status < 200 || status >= 300) return '上游 HTTP ' + status + '。请查看诊断的响应头与错误摘要，不能仅凭状态码确定拒绝原因。';
     var body = typeof response.body === 'string' ? response.body : '';
     if (!body.trim()) return '上游响应为空，未作为成功配置保存。';
     if (body.length > CONFIG.maxChars) return '响应超过本机适配脚本的大小限制。';
@@ -319,12 +324,12 @@
     return null;
   }
   function messageOf(error) { return String(error && (error.message || error.error) || error || 'Unknown error'); }
-  async function fetchAllowed(url, kind, ua, fetcher) {
+  async function fetchAllowed(url, kind, ua, fetcher, accept) {
     var current = url.split('#')[0];
     for (var i = 0; i <= CONFIG.maxRedirects; i++) {
       if (!tools.allowed(current, kind)) throw new Error('目标不在允许的 kelee.one/Tool/Loon/ 资源范围内。');
       var response = await fetcher({url:current,method:'GET',headers:{
-        'User-Agent':ua, 'Accept':'text/plain, */*;q=0.8'
+        'User-Agent':ua, 'Accept':typeof accept === 'string' ? accept : CONFIG.accept
       },opts:{redirection:false,'skip-cert-verify':false,'auto-cookie':false}});
       var code = Number(response.statusCode);
       if ([301,302,303,307,308].indexOf(code) < 0) return {response:response,url:current};
@@ -337,33 +342,122 @@
   function healthPage() {
     var diagnostic = CONFIG.backendOrigin + 'kelee-qx/diagnose?url=' + encodeURIComponent(EXAMPLE);
     var qx = tools.toQX('loon://import?plugin=' + EXAMPLE);
-    return page('本机下载服务已运行', '<p>这证明 <code>[http_backend]</code> 配置可用。还没有下载任何插件。</p>' +
+    return page('本机下载服务已运行', '<p>当前后端版本：<strong>' + escapeHTML(CONFIG.version) + '</strong>。此页只证明后端可用，不代表原站下载成功。</p>' +
       '<p><a id="install-rewrite" class="button" href="' + escapeHTML(bootstrapImportURL()) + '">添加网页适配重写订阅到 QX</a></p>' +
-      '<p>此按钮只添加本脚本提供的原生重写订阅（<code>opt-parser=false</code>），不修改完整配置。已有订阅时不用重复添加。</p>' +
-      '<p><a href="' + CONFIG.backendOrigin + 'kelee-qx/rewrite.snippet">查看原生重写内容</a> · <a href="' + CONFIG.backendOrigin + 'kelee-qx/adapter.js?v=' + encodeURIComponent(CONFIG.version) + '">查看当前适配脚本</a></p>' +
-      '<p>候选 UA：<code>' + escapeHTML(CONFIG.loonUA) + '</code>。这不是已经验证过的真实 Loon 完整请求。</p>' +
+      '<p>已有订阅不需要重加；替换脚本后更新一次现有网页适配订阅即可。</p>' +
+      '<p><a href="' + CONFIG.backendOrigin + 'kelee-qx/rewrite.snippet">查看原生重写内容</a> · <a href="' + CONFIG.backendOrigin + 'kelee-qx/adapter.js">查看当前适配脚本</a></p>' +
+      '<p>脚本提交的 UA：<code>' + escapeHTML(CONFIG.loonUA) + '</code></p>' +
+      '<p>Accept：<code>' + escapeHTML(CONFIG.accept) + '</code>。这是 Loon 官方公布的 UA 示例，并非已验证原站接受，也不代表完整模拟 Loon 网络栈。</p>' +
       '<p><a class="button" href="' + escapeHTML(diagnostic) + '">检查 BlockAdvertisers 下载</a></p>' +
+      '<form action="' + CONFIG.backendOrigin + 'kelee-qx/diagnose" method="get"><label for="resource-url">也可检查其他可莉插件原始地址：</label><br>' +
+      '<input id="resource-url" name="url" type="url" required style="width:100%;box-sizing:border-box" value="' + escapeHTML(EXAMPLE) + '"><button type="submit">检查此资源</button></form>' +
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
-      '<p>诊断会向原站发送两次请求，对比 Safari 风格 UA 与候选 Loon UA；不是破解验证或解密 LPX。</p>' +
-      '<p>需要换 UA 时，编辑脚本顶部 <code>CONFIG.loonUA</code>。如修改本机端口，也同步修改 <code>backendOrigin</code>。</p>');
+      '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
+      '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
+  }
+  /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
+  function redact(value) {
+    return String(value == null ? '' : value)
+      .replace(/(https?:\/\/[^\s<>"'?]+)\?[^\s<>"']*/gi, '$1?[redacted]')
+      .replace(/([?&]|\b)(token|access_token|api_key|apikey|key|secret|password|auth|authorization|cookie|session|signature|sig)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&<>;,]+)/gi, '$1$2$3[redacted]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+/gi, 'Bearer [redacted]')
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[IP redacted]')
+      .replace(/(?:[a-f0-9]{1,4}:){2,}[a-f0-9:]{0,39}/gi, '[IPv6 redacted]')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email redacted]');
+  }
+  function safeURL(value) {
+    var p = tools.parseURL(value);
+    return p ? p.scheme + '://' + p.authority + p.path + (p.query ? '?[redacted]' : '') : '[invalid URL]';
+  }
+  function selectedHeaders(headers) {
+    var result = {};
+    ['content-type','server','cf-ray','cf-mitigated','retry-after'].forEach(function (name) {
+      var value = header(headers, name);
+      if (value) result[name] = redact(value).slice(0,256);
+    });
+    return result;
+  }
+  function errorExcerpt(body) {
+    // Limit inspection and output. Strip scripts/styles before stripping HTML tags.
+    return redact(String(body || '').slice(0,32768)
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi,' ')
+      .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi,' ')
+      .replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim()).slice(0,900);
+  }
+  function responseEvidence(response, kind) {
+    var problem = bodyProblem(response, kind);
+    var code = Number(response.statusCode || 0);
+    var classification;
+    // A Cloudflare Server or CF-Ray header alone does NOT prove a bot challenge.
+    if (header(response.headers, 'cf-mitigated').toLowerCase() === 'challenge') classification = 'challenge-evidence';
+    else if (code === 401 || code === 403) classification = 'http-denied';
+    else if (code === 429) classification = 'rate-limited';
+    else if (code < 200 || code >= 300) classification = 'http-error';
+    else if (problem && /HTML/.test(problem)) classification = 'unexpected-html';
+    else if (problem) classification = 'unrecognized-content';
+    else classification = kind === 'resource' ? 'text-plugin' : 'script-text-unvalidated';
+    return {status:code, classification:classification, problem:problem,
+      responseHeaders:selectedHeaders(response.headers),
+      length:typeof response.body === 'string' ? response.body.length : 0,
+      errorExcerpt:problem ? errorExcerpt(response.body) : ''};
+  }
+  function responseError(fetched, kind, ua) {
+    var evidence = responseEvidence(fetched.response, kind);
+    var upstream = Number(fetched.response.statusCode || 0);
+    var isHTTPError = upstream >= 400 && upstream <= 599;
+    var stage = isHTTPError ? 'upstream-http' : 'resource-validation';
+    var report = {version:CONFIG.version, stage:stage, target:safeURL(fetched.url),
+      requestedUserAgent:ua, requestedAccept:CONFIG.accept, evidence:evidence};
+    var r = reply(isHTTPError ? upstream : 502, 'Kelee-QX 下载失败\n' +
+      evidence.problem + '\n\n' + JSON.stringify(report,null,2) +
+      '\n\n打开本机 health 页进行诊断。403/429 不会自动重试，错误内容不会冒充成功配置。');
+    r.headers['X-Kelee-QX-Upstream-Status'] = String(upstream);
+    r.headers['X-Kelee-QX-Stage'] = stage;
+    console.log('[Kelee-QX ' + CONFIG.version + '] ' + stage + ' upstream=' + upstream + ' ' + safeURL(fetched.url));
+    return r;
   }
   async function diagnose(url, fetcher) {
-    var browserUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1';
-    var rows = await Promise.all([{label:'Safari 风格 UA',ua:browserUA},{label:'候选 Loon UA',ua:CONFIG.loonUA}].map(async function (item) {
+    var profiles = [
+      {label:'A · 旧版 UA（对照）',ua:'Loon/3.5.1',accept:CONFIG.accept},
+      {label:'B · 公布的完整 UA（当前下载配置）',ua:CONFIG.loonUA,accept:CONFIG.accept},
+      {label:'C · 完整 UA + Accept: */*',ua:CONFIG.loonUA,accept:'*/*'}
+    ];
+    var rows = await Promise.all(profiles.map(async function (item) {
+      var start = Date.now();
       try {
-        var fetched = await fetchAllowed(url,'resource',item.ua,fetcher);
-        var r = fetched.response;
-        return {label:item.label,ua:item.ua,status:r.statusCode,type:header(r.headers,'content-type'),length:(r.body||'').length,problem:bodyProblem(r,'resource')};
-      } catch (error) { return {label:item.label,ua:item.ua,status:'请求失败',type:'',length:0,problem:messageOf(error)}; }
+        var fetched = await fetchAllowed(url,'resource',item.ua,fetcher,item.accept);
+        var evidence = responseEvidence(fetched.response,'resource');
+        evidence.label = item.label;
+        evidence.ua = item.ua;
+        evidence.accept = item.accept;
+        evidence.elapsedMs = Date.now() - start;
+        evidence.finalURL = safeURL(fetched.url);
+        return evidence;
+      } catch (error) {
+        return {label:item.label,ua:item.ua,accept:item.accept,status:0,
+          elapsedMs:Date.now()-start,classification:'transport-or-redirect-error',
+          responseHeaders:{},length:0,problem:redact(messageOf(error)),errorExcerpt:''};
+      }
     }));
-    var content = '<p>仅比较 HTTP 标识，不代表模拟完整 Loon/TLS 行为。目标：</p><pre>' + escapeHTML(url) + '</pre>' +
-      '<table><tr><th>请求</th><th>状态</th><th>内容检查</th></tr>';
+    var report = {version:CONFIG.version,generatedAt:new Date().toISOString(),target:safeURL(url),rows:rows};
+    var content = '<p>A → B 仅改变 UA；B → C 仅改变 Accept。B 是当前正常资源下载使用的配置。</p>' +
+      '<p>目标：</p><pre>' + escapeHTML(safeURL(url)) + '</pre><table><tr><th>请求</th><th>状态</th><th>内容检查</th></tr>';
     rows.forEach(function (r) {
-      content += '<tr><td>' + escapeHTML(r.label) + '</td><td>' + escapeHTML(r.status) + '</td><td>' +
-        escapeHTML(r.problem || '识别到文本插件；尚未验证 QX 转换') + '<br><small>' + escapeHTML(r.type || '未声明类型') + ' · ' + r.length + ' 字符</small></td></tr>';
+      content += '<tr><td>' + escapeHTML(r.label) + '</td><td>' + escapeHTML(r.status || '请求失败') + '</td><td>' +
+        escapeHTML(r.problem || '识别到文本插件；尚未验证 QX 转换') + '<br><small>' + r.length + ' 字符 · ' + r.elapsedMs + ' ms</small></td></tr>';
     });
-    content += '</table><p>只有 Loon 行出现 200 且识别到文本插件，才支持“此 UA 在当前网络可用于下载”的判断。两行均失败时，不能归因于 UA，也不要反复重试。</p>' +
-      '<p>获取成功不代表规则、脚本、参数和外部依赖已兼容 QX。</p><p><a href="' + escapeHTML(tools.toQX('loon://import?plugin=' + url)) + '">添加到 Quantumult X</a></p>';
+    content += '</table>';
+    rows.forEach(function (r) {
+      content += '<details><summary>' + escapeHTML(r.label) + ' · 请求/响应详情</summary><pre>' + escapeHTML(JSON.stringify(r,null,2)) + '</pre></details>';
+    });
+    content += '<p><strong>判断：</strong>B 返回 200 且识别到文本插件后，在 QX 更新原来失败的那条插件资源即可，不需要重新添加。' +
+      '若只有 C 成功，可把脚本顶部 <code>CONFIG.accept</code> 改为 <code>"*/*"</code>，保存并重载后再更新资源。</p>' +
+      '<p>B/C 都为 403 时，请看响应详情。<code>server=cloudflare</code> 本身不能证明是验证码；只有明确的 challenge 标志才标记为 challenge-evidence。' +
+      '更换 UA 不等于模拟 Cookie、TLS 指纹或登录授权；不要反复点更新。</p>' +
+      '<p>下方是当前这次结果的脱敏报告；长按全选复制即可，不会再次请求原站。已排除 Cookie 和 Authorization 响应头，分享前仍请检查摘要是否含个人信息。</p>' +
+      '<textarea id="kelee-qx-report" readonly rows="16" style="width:100%;box-sizing:border-box;font:12px monospace">' + escapeHTML(JSON.stringify(report,null,2)) + '</textarea>' +
+      '<p>HTTP 200 不等于插件可用：正文须为文本配置，之后还要通过解析器和依赖检查。</p>' +
+      '<p><a href="' + escapeHTML(tools.toQX('loon://import?plugin=' + url)) + '">添加到 Quantumult X</a> · <a href="' + CONFIG.backendOrigin + 'kelee-qx/health">返回检查页</a></p>';
     return reply(200,page('资源下载诊断',content),'text/html');
   }
   async function backendResponse(request, fetcher) {
@@ -390,10 +484,17 @@
     try {
       var fetched = await fetchAllowed(target,kind,CONFIG.loonUA,fetcher);
       var problem = bodyProblem(fetched.response,kind);
-      if (problem) return reply(502,'Kelee-QX 下载失败：' + problem);
+      if (problem) return responseError(fetched,kind,CONFIG.loonUA);
       var content = kind === 'resource' ? rewriteDependencies(fetched.response.body,fetched.url) : fetched.response.body;
-      return reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
-    } catch (error) { return reply(502,'Kelee-QX 下载失败：' + messageOf(error)); }
+      var success = reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
+      success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
+      success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
+      return success;
+    } catch (error) {
+      var failure = reply(502,'Kelee-QX 请求未完成（网络或重定向校验失败）：' + redact(messageOf(error)));
+      failure.headers['X-Kelee-QX-Stage'] = 'transport';
+      return failure;
+    }
   }
 
   var exportsAPI = {
