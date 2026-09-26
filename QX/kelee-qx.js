@@ -1,13 +1,14 @@
 /*
- * Kelee → Quantumult X install adapter, v1.2.1 (2026-09-26)
+ * Kelee → Quantumult X install adapter, v1.3.0 (2026-09-26)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
  *
- * One file, three jobs:
+ * One file, four jobs:
  * 1. Rewrite the hub's standard Loon installation links.
  * 2. Serve a local installation fallback/status page (script-echo-response).
- * 3. Fetch allow-listed resources using a published Loon UA (http_backend).
+ * 3. Fetch allow-listed resources and Kelee JavaScript dependencies (http_backend).
+ * 4. Pre-normalize old Loon [Script] rules into QX-native rewrite syntax before the resource parser sees them.
  *
  * This is an installer/download adapter, NOT a Loon engine or LPX decryptor.
  * The global resource parser still has to convert the fetched configuration.
@@ -17,13 +18,11 @@
   'use strict';
 
   // Published iOS resource UA: https://t.me/s/LoonNews (post 2016, 2026-09-16).
-  // This is a documented example, NOT a claim about every device or site acceptance.
-  // v1.2.1 only makes remoteSnippet/adapter URLs stable (no version suffix).
-  // Upstream download is still UNVERIFIED: this session's outbound GETs failed
-  // during DNS resolution, before any HTTP response was obtained.
-  // No new UA is claimed to work; diagnostic profiles do not establish acceptance.
+  // Keep remoteSnippet/adapter URLs stable: no version suffix is appended.
+  // Kelee may apply different access controls to plugin files and JavaScript assets,
+  // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.2.1',
+    version: '1.3.0',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -53,7 +52,7 @@
       var path;
       try { path = decodeURIComponent(p.path); } catch (_) { return false; }
       if (/[\x00-\x20\x7f\\%]/.test(path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(path)) return false;
-      if (kind === 'asset') return /^\/Tool\/Loon\/.+\.js$/i.test(path);
+      if (kind === 'asset') return /^\/Tool\/Loon\/.+\.js$/i.test(path) || /^\/Resource\/JavaScript\/.+\.js$/i.test(path);
       return /^\/Tool\/Loon\/(?:Lpx|Plugin)\/[^/]+\.(?:lpx|plugin)$/i.test(path);
     }
     function extractPlugin(link) {
@@ -72,7 +71,8 @@
       var p = parseURL(value);
       var hash = p ? p.hash : '';
       var wireURL = hash ? value.slice(0, -hash.length) : value;
-      return cfg.backendOrigin + 'kelee-qx/' + (kind || 'resource') + '?url=' +
+      var route = kind === 'asset' ? 'asset.js' : (kind || 'resource');
+      return cfg.backendOrigin + 'kelee-qx/' + route + '?url=' +
         encodeURIComponent(wireURL) + hash;
     }
     function tagFor(value) {
@@ -312,6 +312,42 @@
       });
     }).join('\n');
   }
+  function normalizeLoonScriptRules(content) {
+    var section = '';
+    return String(content || '').split('\n').map(function (line) {
+      var trimmed = line.trim();
+      if (/^\[[^\]]+\]$/.test(trimmed)) { section = trimmed.toLowerCase(); return line; }
+      if (section !== '[script]' || !trimmed || /^(?:#|;|\/\/)/.test(trimmed)) return line;
+      var m = trimmed.match(/^(http-response|http-request)\s+(\S+)\s+script-path\s*=\s*(?:"([^"]+)"|'([^']+)'|([^,\s]+))([\s\S]*)$/i);
+      if (!m) return line;
+      var mode = m[1].toLowerCase();
+      var pattern = m[2].replace(/\(\?:/g, '(');
+      var script = m[3] || m[4] || m[5];
+      var requiresBody = /(?:^|,)\s*requires-body\s*=\s*(?:true|1)(?:\s*,|\s*$)/i.test(m[6] || '');
+      var action = mode === 'http-response'
+        ? (requiresBody ? 'script-response-body' : 'script-response-header')
+        : (requiresBody ? 'script-request-body' : 'script-request-header');
+      return pattern + ' url ' + action + ' ' + script;
+    }).join('\n');
+  }
+  function normalizeSafeLoonRewritePatterns(content) {
+    var section = '';
+    return String(content || '').split('\n').map(function (line) {
+      var trimmed = line.trim();
+      if (/^\[[^\]]+\]$/.test(trimmed)) { section = trimmed.toLowerCase(); return line; }
+      if (section !== '[rewrite]' || !trimmed || /^(?:#|;|\/\/)/.test(trimmed)) return line;
+      var m = trimmed.match(/^(\S+)\s+([\s\S]+)$/);
+      if (!m) return line;
+      var action = m[2];
+      if (!/^(?:reject(?:-[\w-]+)?|response-body-json-(?:replace|del|jq)|request-body-json-jq)(?:\s|$)/i.test(action)) return line;
+      return m[1].replace(/\(\?:/g, '(') + ' ' + action;
+    }).join('\n');
+  }
+  function prepareResourceContent(content, originalURL) {
+    var withLocalDependencies = rewriteDependencies(content, originalURL);
+    return normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(withLocalDependencies));
+  }
+
   function bodyProblem(response, kind) {
     var status = Number(response.statusCode || 0);
     if (status < 200 || status >= 300) return '上游 HTTP ' + status + '。请查看诊断的响应头与错误摘要，不能仅凭状态码确定拒绝原因。';
@@ -327,7 +363,7 @@
   async function fetchAllowed(url, kind, ua, fetcher, accept) {
     var current = url.split('#')[0];
     for (var i = 0; i <= CONFIG.maxRedirects; i++) {
-      if (!tools.allowed(current, kind)) throw new Error('目标不在允许的 kelee.one/Tool/Loon/ 资源范围内。');
+      if (!tools.allowed(current, kind)) throw new Error('目标不在允许的 kelee.one 插件/脚本资源范围内。');
       var response = await fetcher({url:current,method:'GET',headers:{
         'User-Agent':ua, 'Accept':typeof accept === 'string' ? accept : CONFIG.accept
       },opts:{redirection:false,'skip-cert-verify':false,'auto-cookie':false}});
@@ -347,12 +383,13 @@
       '<p>已有订阅不需要重加；替换脚本后更新一次现有网页适配订阅即可。</p>' +
       '<p><a href="' + CONFIG.backendOrigin + 'kelee-qx/rewrite.snippet">查看原生重写内容</a> · <a href="' + CONFIG.backendOrigin + 'kelee-qx/adapter.js">查看当前适配脚本</a></p>' +
       '<p>脚本提交的 UA：<code>' + escapeHTML(CONFIG.loonUA) + '</code></p>' +
-      '<p>Accept：<code>' + escapeHTML(CONFIG.accept) + '</code>。这是 Loon 官方公布的 UA 示例，并非已验证原站接受，也不代表完整模拟 Loon 网络栈。</p>' +
+      '<p>Accept：<code>' + escapeHTML(CONFIG.accept) + '</code>。不同 Kelee 路径可能采用不同访问控制；以当前资源/脚本的实际状态为准。</p>' +
       '<p><a class="button" href="' + escapeHTML(diagnostic) + '">检查 BlockAdvertisers 下载</a></p>' +
       '<form action="' + CONFIG.backendOrigin + 'kelee-qx/diagnose" method="get"><label for="resource-url">也可检查其他可莉插件原始地址：</label><br>' +
       '<input id="resource-url" name="url" type="url" required style="width:100%;box-sizing:border-box" value="' + escapeHTML(EXAMPLE) + '"><button type="submit">检查此资源</button></form>' +
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
+      '<p>v1.3.0 会在资源解析器之前把旧式 Loon [Script] 规则预转换为 QX 原生 script-* 规则，并把允许范围内的 Kelee JavaScript 依赖改走本机后端。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
@@ -475,17 +512,17 @@
     }
     // HEAD never initiates an upstream resource download or diagnostic.
     if (method === 'HEAD') return reply(405,'Use GET for resource downloads and diagnostics.');
-    var kind = p.path === '/kelee-qx/asset' ? 'asset' : p.path === '/kelee-qx/resource' || p.path === '/kelee-qx/diagnose' ? 'resource' : null;
+    var kind = p.path === '/kelee-qx/asset.js' ? 'asset' : p.path === '/kelee-qx/resource' || p.path === '/kelee-qx/diagnose' ? 'resource' : null;
     if (!kind) return reply(404,'Unknown local backend route.');
     var target = queryValue(request.url,'url');
-    if (!target || !tools.allowed(target,kind)) return reply(400,'目标不在允许的 kelee.one/Tool/Loon/ 资源范围内。');
+    if (!target || !tools.allowed(target,kind)) return reply(400,'目标不在允许的 kelee.one 插件/脚本资源范围内。');
     if (typeof fetcher !== 'function') return reply(502,'QX $task.fetch 不可用。请检查 http_backend 配置。');
     if (p.path === '/kelee-qx/diagnose') return diagnose(target,fetcher);
     try {
       var fetched = await fetchAllowed(target,kind,CONFIG.loonUA,fetcher);
       var problem = bodyProblem(fetched.response,kind);
       if (problem) return responseError(fetched,kind,CONFIG.loonUA);
-      var content = kind === 'resource' ? rewriteDependencies(fetched.response.body,fetched.url) : fetched.response.body;
+      var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url) : fetched.response.body;
       var success = reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
       success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
@@ -500,7 +537,7 @@
   var exportsAPI = {
     CONFIG: CONFIG, toQX:tools.toQX, extractPlugin:tools.extractPlugin,
     patchPrefixes:patchPrefixes, rewriteResponse:rewriteResponse,
-    rewriteDependencies:rewriteDependencies, backendResponse:backendResponse,
+    rewriteDependencies:rewriteDependencies, normalizeLoonScriptRules:normalizeLoonScriptRules, normalizeSafeLoonRewritePatterns:normalizeSafeLoonRewritePatterns, prepareResourceContent:prepareResourceContent, backendResponse:backendResponse,
     bodyProblem:bodyProblem, browserHelper:browserHelper, createLinkTools:createLinkTools,
     remoteSnippet:remoteSnippet, adapterSource:adapterSource, bootstrapImportURL:bootstrapImportURL
   };
