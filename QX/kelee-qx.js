@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.4.1 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.5.0 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.4.1',
+    version: '1.5.0',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -339,7 +339,7 @@
   }
   /**
    * Parse the observed conditional DSL as data; never eval upstream content.
-   * Supported: URL regex + script(), request reject*(), response.json.replace().
+   * Supported: URL regex + script(), request reject*(), JSON replace/jq/delete.
    * Consume the entire line, preserve regex groups/flags, and fail atomically.
    * Unsupported actions/conditions are not silently removed from a subscription.
    */
@@ -388,6 +388,8 @@
         at += value.length;
       }
       var then = text.slice(at).match(/^\s+then\s+/i);
+      if (!then && /^\s+as\s+[a-z_]\w*\s+then\b/i.test(text.slice(at)))
+        fail('命名 URL 捕获（as）及其 URL 替换尚无已验证的等价 QX 转换；未改成重定向，也未删除此规则。');
       if (!then) fail('正则后仅支持 then，不支持附加条件。');
       at += then[0].length;
       function value(depth) {
@@ -434,6 +436,38 @@
       var action = text.slice(at).match(/^([a-z_][a-z0-9_.]*)\s*\(/i);
       if (!action) fail('未识别的条件动作。');
       var name = action[1]; at += action[0].length;
+      var jsonAction = name.match(/^(request|response)\.json\.(jq|delete)$/);
+      if (jsonAction) {
+        if (mode !== jsonAction[1]) fail('JSON 动作与 request/response 阶段不一致。');
+        var argument = value(0); token(')'); finish();
+        var expression;
+        if (jsonAction[2] === 'jq') {
+          if (typeof argument !== 'string' || !argument.trim() || /[\r\n\x00]/.test(argument))
+            fail('jq 必须是非空单行表达式。');
+          expression = argument;
+        } else {
+          var deletePaths = Array.isArray(argument) ? argument : [argument];
+          if (!deletePaths.length) fail('delete 路径数组不能为空。');
+          expression = deletePaths.map(function (path) {
+            if (typeof path !== 'string' || !path) fail('delete 路径必须是非空字符串。');
+            var cursor = 0, segments = [];
+            while (cursor < path.length) {
+              var field = path.slice(cursor).match(/^(?:\.?)([a-zA-Z_][a-zA-Z0-9_]*)/);
+              var item = path.slice(cursor).match(/^\[(0|[1-9][0-9]*)\]/);
+              if (field && (cursor === 0 || path.charAt(cursor) === '.')) {
+                segments.push(field[1]); cursor += field[0].length;
+              } else if (item && Number(item[1]) <= 9007199254740991) {
+                segments.push(Number(item[1])); cursor += item[0].length;
+              } else fail('delete 仅支持字段名、点分隔及非负数组下标。');
+            }
+            // Loon batch actions run in order. Never merge/deduplicate array
+            // indices: a previous deletion can move the following index.
+            return '(. as $kelee_original | try delpaths(' + JSON.stringify([segments]) + ') catch $kelee_original)';
+          }).join(' | ');
+        }
+        return protectParserPattern(pattern) + ' url jsonjq-' + mode + '-body ' +
+          "'" + expression.replace(/'/g,"\\'") + "'";
+      }
       if (name === 'script') {
         var script = value(0); token(')');
         if (typeof script !== 'string' || !script) fail('脚本地址必须是非空字符串。');
@@ -534,7 +568,9 @@
     if (!body.trim()) return '上游响应为空，未作为成功配置保存。';
     if (body.length > CONFIG.maxChars) return '响应超过本机适配脚本的大小限制。';
     if (/text\/html/i.test(header(response.headers,'content-type')) || /^\s*(?:<!doctype\s+html|<html\b|<head\b|<body\b|<script\b)/i.test(body)) return '上游返回 HTML 页面而非资源，可能是 block 或验证页面。';
-    if (/[\x00\ufffd]/.test(body)) return '响应不是可识别的文本格式；本脚本不处理加密或二进制 LPX。';
+    // U+FFFD can be intentional JavaScript data (e.g. an HTML entity table).
+    // Keep strict config decoding checks, but do not reject valid JS literals.
+    if (/\x00/.test(body) || (kind === 'resource' && /\ufffd/.test(body))) return '响应不是可识别的文本格式；本脚本不处理加密或二进制 LPX。';
     if (kind === 'resource' && !/^\s*\[(?:General|Rule|Rewrite|Script|Mitm|Argument|Host|URL Rewrite|Map Local)\]\s*$/im.test(body)) return '未识别到 Loon 文本配置区段；不把未知 LPX 格式当成可转换插件。';
     return null;
   }
@@ -568,7 +604,7 @@
       '<input id="resource-url" name="url" type="url" required style="width:100%;box-sizing:border-box" value="' + escapeHTML(EXAMPLE) + '"><button type="submit">检查此资源</button></form>' +
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
-      '<p>支持旧式 Loon 脚本及 request/response if URL 正则条件下的 script、reject 和 response.json.replace。保留正则分组和 i/m/s 标志，允许范围内的 Kelee JavaScript 依赖走本机后端；不支持的条件动作会返回带行号的转换错误。JSON 规则仍需全局资源解析器。</p>' +
+      '<p>支持旧式 Loon 脚本及 URL 正则条件下的 script、reject、JSON jq/delete 和 response.json.replace。批量删除保持执行顺序，允许范围内的 Kelee JavaScript 依赖走本机后端；未支持的条件动作返回带插件名称、资源 URL、行号和原始规则的转换错误。JSON 规则仍需全局资源解析器。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
