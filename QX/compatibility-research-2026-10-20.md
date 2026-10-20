@@ -48,10 +48,13 @@ Kelee 源包含命名正则捕获、跨主机 `url.replace`、后续响应脚本
 | 同主机 URL 修改 | v1 | 未记录此字段 | 200 | 修改后的路径与查询被目标端点回显。 |
 | 跨主机，只返回 url | v2 | partial | 404 | Not Found 模板；无目标服务特征。 |
 | 跨主机，返回 url 并修改 Host | v2 | target | 404 | Not Found 模板；无目标服务特征。 |
+| 直接访问固定 Cloudflare 目标，对照 | 直接访问，未得到探针 JSON | 未记录 | 未提供 HTTP 状态码 | 收到 Cloudflare trace，包含目标 h、https 与 TLS 特征。 |
 
 对照与同源成功证实设备可执行探针及同源路径修改。只改 url 时看到“原主机＋新路径”；加 Host 后看到 target 形态，但该字段来自响应脚本的 `$request.url`，不是连接目的 IP、TLS SNI 或所用策略的证据。两次 404 均保持 inconclusive；相同错误模板不能证明服务身份，显示 target 也不能作为跨主机改写成功的依据。
 
-这组结果尚未得到用户网络中“直接访问 Cloudflare 目标”的对照，不能排除目标自身可达性或服务响应差异。目前两种已测写法均没有得到成功迁移到目标服务的证据，生产适配器继续拒绝 Spotify。此结论仅限上述实测写法，不宣称 QX 所有跨主机实现都不可能。
+用户随后直接访问同一个固定 Cloudflare 目标，收到原始 trace，其 h、visit_scheme、tls 字段符合目标特征。这是独立的直接访问对照，不是改写成功的证据。直接访问未出现探针 JSON，因此也未证明目标上的响应脚本实际执行，更未记录其 HTTP 状态码。只保留以上选定结论，不保存 trace 中的 IP、UA 或其他原始字段。
+
+直接访问与两次改写结果不同，进一步表明当前两种写法不能据现有证据用于等价转换。404 模板和 URL 形态仍不足以确定实际连接 IP、SNI 或具体失败层；不同路由/重写路径的影响未被排除。生产适配器继续拒绝 Spotify，此结论仅限上述实测写法，不宣称 QX 所有跨主机实现都不可能。
 
 Spotify 不止这一处阻断：上游第 18 行还有 `spotify.com 后缀 AND QUIC → REJECT`，原 MitM 仅覆盖 spclient 相关主机，不能以其自动 QUIC enforcement 替换整个后缀；二进制脚本仍带自定义参数和超时要求。即使 URL 探针成功，也不能单凭这一项解除整份插件的 422。“剩余六条”仅计 RedPaper、PinDuoDuo、Block_HTTPDNS 三份，未包含 Spotify 的这条 QUIC 逻辑。
 
