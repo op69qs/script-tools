@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.3.0 (2026-09-26)
+ * Kelee → Quantumult X install adapter, v1.4.0 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -8,7 +8,7 @@
  * 1. Rewrite the hub's standard Loon installation links.
  * 2. Serve a local installation fallback/status page (script-echo-response).
  * 3. Fetch allow-listed resources and Kelee JavaScript dependencies (http_backend).
- * 4. Pre-normalize old Loon [Script] rules into QX-native rewrite syntax before the resource parser sees them.
+ * 4. Normalize old Loon scripts and conditional request/response rules before the resource parser sees them.
  *
  * This is an installer/download adapter, NOT a Loon engine or LPX decryptor.
  * The global resource parser still has to convert the fetched configuration.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.3.0',
+    version: '1.4.0',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -222,7 +222,7 @@
   }
 
   function reply(code, body, type) {
-    var reason = {200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',405:'Method Not Allowed',429:'Too Many Requests',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable',504:'Gateway Timeout'}[code] || 'Error';
+    var reason = {200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',405:'Method Not Allowed',422:'Unprocessable Content',429:'Too Many Requests',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable',504:'Gateway Timeout'}[code] || 'Error';
     return {status:'HTTP/1.1 ' + code + ' ' + reason, headers: {
       'Content-Type': (type || 'text/plain') + '; charset=utf-8',
       'Cache-Control': 'no-store', 'X-Content-Type-Options':'nosniff',
@@ -298,9 +298,12 @@
     return p.scheme + '://' + p.authority + '/' + parts.join('/') + (suffix ? suffix[0] : '');
   }
   function rewriteDependencies(content, originalURL) {
-    // Only script-path fields. Never modify URL regexes, scripts or arbitrary text.
+    // Only recognized script declarations. JSON values may literally contain
+    // "script-path=...", which must never be interpreted as dependencies.
     return content.split('\n').map(function (line) {
       if (/^\s*(?:#|;|\/\/)/.test(line)) return line;
+      if (!/^\s*http-(?:request|response)\s+\S+\s+script-path\s*=/i.test(line) &&
+          !/^\s*(?:[\w.-]+\s*=\s*)?type\s*=\s*http-(?:request|response)\b/i.test(line)) return line;
       return line.replace(/(\bscript-path\s*=\s*)(?:"([^"]+)"|'([^']+)'|([^,\s]+))/gi, function (all, prefix, dq, sq, bare) {
         var value = dq || sq || bare;
         var absolute = resolveRelative(originalURL, value);
@@ -312,6 +315,179 @@
       });
     }).join('\n');
   }
+  function protectParserPattern(pattern) {
+    // KOP removes the literal substring "^http" even when the anchor is
+    // semantically necessary. An empty noncapturing group preserves that
+    // anchor without shifting capture numbers. Escape literal carets instead.
+    var out = '', inClass = false;
+    for (var i = 0; i < pattern.length; i++) {
+      var c = pattern.charAt(i);
+      if (c === '\\' && i + 1 < pattern.length) {
+        if (pattern.charAt(i + 1) === '^' && pattern.slice(i + 2, i + 6) === 'http') out += '\\x5e';
+        else out += c + pattern.charAt(i + 1);
+        i++; continue;
+      }
+      if (c === '[') inClass = true;
+      else if (c === ']') inClass = false;
+      if (c === '^' && pattern.slice(i + 1, i + 5) === 'http') {
+        if (inClass && pattern.charAt(i - 1) === '[') { out += '^\\x68'; i++; }
+        else out += inClass ? '\\x5e' : '^(?:)';
+      }
+      else out += c;
+    }
+    return out;
+  }
+  /**
+   * Parse the observed conditional DSL as data; never eval upstream content.
+   * Supported: URL regex + script(), request reject*(), response.json.replace().
+   * Consume the entire line, preserve regex groups/flags, and fail atomically.
+   * Unsupported actions/conditions are not silently removed from a subscription.
+   */
+  function normalizeConditionalRules(content, originalURL) {
+    var section = '', inComment = false;
+    return String(content || '').split('\n').map(function (line, index) {
+      var text = line.trim();
+      if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
+      if (/^\/\*/.test(text)) { inComment = text.indexOf('*/', 2) === -1; return line; }
+      if (/^\[[^\]]+\]$/.test(text)) { section = text.toLowerCase(); return line; }
+      if (!/^\[(?:script|rewrite|url rewrite|body rewrite)\]$/.test(section) ||
+          !/^(?:request|response)\s+if\b/i.test(text)) return line;
+      function fail(reason) {
+        var error = new Error('第 ' + (index + 1) + ' 行 ' + section + '：' + reason);
+        error.keleeStage = 'resource-conversion';
+        throw error;
+      }
+      var head = text.match(/^(request|response)\s+if\s+\$\{url\}\s*~=\s*/i);
+      if (!head) fail('仅支持单个 URL 正则条件。');
+      var mode = head[1].toLowerCase(), at = head[0].length;
+      if (text.charAt(at++) !== '/') fail('URL 条件必须是 /pattern/flags。');
+      var start = at, escaped = false, inClass = false, end = -1;
+      for (; at < text.length; at++) {
+        var ch = text.charAt(at);
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\') { escaped = true; continue; }
+        if (ch === '[') inClass = true;
+        else if (ch === ']') inClass = false;
+        else if (ch === '/' && !inClass) { end = at++; break; }
+      }
+      if (end < 0) fail('正则未闭合。');
+      var pattern = text.slice(start, end);
+      var flags = (text.slice(at).match(/^[a-z]*/i) || [''])[0];
+      at += flags.length;
+      if (/[^ims]/.test(flags) || /(.).*\1/.test(flags)) fail('正则标志仅支持不重复的 i、m、s。');
+      if (!pattern || /\s/.test(pattern)) fail('正则必须非空；空白请写为 \\x20 或 \\s 等转义。');
+      try { new RegExp(pattern, flags); } catch (_) { fail('正则语法无效或当前运行环境不支持。'); }
+      if (flags) pattern = '(?' + ['i','m','s'].filter(function (f) { return flags.indexOf(f) !== -1; }).join('') + ')' + pattern;
+      function space() { while (/\s/.test(text.charAt(at)) && at < text.length) at++; }
+      function token(value) {
+        space();
+        if (text.slice(at, at + value.length) !== value) fail('动作或参数格式不支持。');
+        at += value.length;
+      }
+      var then = text.slice(at).match(/^\s+then\s+/i);
+      if (!then) fail('正则后仅支持 then，不支持附加条件。');
+      at += then[0].length;
+      function value(depth) {
+        if (depth > 4) fail('参数嵌套过深。');
+        space();
+        var quote = text.charAt(at), out = '';
+        if (quote === '"' || quote === "'") {
+          at++;
+          while (at < text.length) {
+            var c = text.charAt(at++);
+            if (c === quote) return out;
+            if (c === '\\') {
+              var e = text.charAt(at++);
+              var escapes = {'"':'"', "'":"'", '\\':'\\', '/':'/', b:'\b', f:'\f', n:'\n', r:'\r', t:'\t'};
+              if (Object.prototype.hasOwnProperty.call(escapes, e)) out += escapes[e];
+              else if (e === 'u' && /^[0-9a-f]{4}$/i.test(text.slice(at, at + 4))) {
+                out += String.fromCharCode(parseInt(text.slice(at, at + 4),16)); at += 4;
+              } else fail('字符串包含不支持的转义。');
+            } else { if (c.charCodeAt(0) < 32) fail('字符串含控制字符。'); out += c; }
+          }
+          fail('字符串未闭合。');
+        }
+        if (quote === '[') {
+          at++; space(); var items = [];
+          if (text.charAt(at) === ']') { at++; return items; }
+          while (at < text.length) {
+            items.push(value(depth + 1)); space();
+            if (text.charAt(at) === ']') { at++; return items; }
+            token(',');
+          }
+          fail('数组未闭合。');
+        }
+        var scalar = text.slice(at).match(/^(true|false|[01])(?=\s|,|\)|\]|$)/);
+        if (scalar) {
+          at += scalar[0].length;
+          return scalar[0] === 'true' ? true : scalar[0] === 'false' ? false : Number(scalar[0]);
+        }
+        fail('参数必须是带引号的字符串、数组或布尔值。');
+      }
+      function finish() {
+        space();
+        if (at !== text.length) fail('动作后存在不支持的参数或尾随内容。');
+      }
+      var action = text.slice(at).match(/^([a-z_][a-z0-9_.]*)\s*\(/i);
+      if (!action) fail('未识别的条件动作。');
+      var name = action[1]; at += action[0].length;
+      if (name === 'script') {
+        var script = value(0); token(')');
+        if (typeof script !== 'string' || !script) fail('脚本地址必须是非空字符串。');
+        space();
+        if (!/^with\s+/.test(text.slice(at))) fail('脚本必须显式指定 requires_body。');
+        at += text.slice(at).match(/^with\s+/)[0].length;
+        var options = Object.create(null);
+        while (at < text.length) {
+          space();
+          var key = text.slice(at).match(/^([a-z_][a-z0-9_-]*)\s*=/i);
+          if (!key) fail('脚本选项格式无效。');
+          at += key[0].length;
+          var option = key[1].replace(/-/g,'_');
+          if ((option !== 'requires_body' && option !== 'tag') || Object.prototype.hasOwnProperty.call(options,option)) fail('脚本含未知或重复选项。');
+          options[option] = value(0); space();
+          if (at === text.length) break;
+          token(',');
+          space(); if (at === text.length) fail('脚本选项不能以逗号结尾。');
+        }
+        if (options.requires_body !== true && options.requires_body !== false && options.requires_body !== 1 && options.requires_body !== 0) fail('requires_body 必须显式设为 true/false 或 1/0。');
+        if (options.tag !== undefined && typeof options.tag !== 'string') fail('tag 必须是字符串。');
+        finish();
+        var absolute = resolveRelative(originalURL,script);
+        if (!absolute || !tools.validHTTPS(absolute)) fail('脚本地址必须解析为有效的 HTTPS 地址。');
+        var next = tools.allowed(absolute,'asset') ? tools.localResource(absolute,'asset') : absolute;
+        // QX rules are whitespace-delimited. Percent-encode URL punctuation only.
+        next = next.replace(/,/g,'%2C');
+        return protectParserPattern(pattern) + ' url script-' + mode + '-' + (options.requires_body ? 'body' : 'header') + ' ' + next;
+      }
+      if (/^reject(?:_img|_dict|_array)?$/.test(name)) {
+        if (mode !== 'request') fail('reject 动作仅支持 request 阶段。');
+        space(); var status = text.slice(at).match(/^(200|404)(?=\s*\))/);
+        if (!status) fail('reject 状态码没有可靠的 QX 等价动作。');
+        at += status[0].length; token(')'); finish();
+        if (name !== 'reject' && status[1] !== '200') fail('带响应类型的 reject 仅支持 HTTP 200。');
+        var reject = name === 'reject' ? (status[1] === '404' ? 'reject' : 'reject-200') : name.replace('_','-');
+        return protectParserPattern(pattern) + ' url ' + reject;
+      }
+      if (name === 'response.json.replace') {
+        if (mode !== 'response') fail('response.json.replace 只能用于 response 阶段。');
+        var paths = value(0); token(','); var values = value(0); token(')'); finish();
+        if (!Array.isArray(paths) && !Array.isArray(values)) { paths = [paths]; values = [values]; }
+        if (!Array.isArray(paths) || !Array.isArray(values) || !paths.length || paths.length !== values.length) fail('JSON 路径与替换值数组必须非空且等长。');
+        var object = Object.create(null), seen = [];
+        paths.forEach(function (path, n) {
+          if (typeof path !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*$/.test(path)) fail('JSON 替换仅支持点分隔的字段路径。');
+          if (seen.some(function (p) { return p === path || p.indexOf(path + '.') === 0 || path.indexOf(p + '.') === 0; })) fail('JSON 路径重复或相互覆盖。');
+          if (typeof values[n] !== 'string') fail('JSON 替换值必须是 JSON 编码的字符串。');
+          try { object[path] = JSON.parse(values[n]); } catch (_) { fail('JSON 替换值不是有效 JSON。'); }
+          seen.push(path);
+        });
+        // The existing global parser handles JSON→jq, including missing fields.
+        return pattern + ' response-body-json-replace ' + JSON.stringify(object);
+      }
+      fail('此条件动作尚无可靠转换，未返回不完整配置。');
+    }).join('\n');
+  }
   function normalizeLoonScriptRules(content) {
     var section = '';
     return String(content || '').split('\n').map(function (line) {
@@ -321,7 +497,7 @@
       var m = trimmed.match(/^(http-response|http-request)\s+(\S+)\s+script-path\s*=\s*(?:"([^"]+)"|'([^']+)'|([^,\s]+))([\s\S]*)$/i);
       if (!m) return line;
       var mode = m[1].toLowerCase();
-      var pattern = m[2].replace(/\(\?:/g, '(');
+      var pattern = protectParserPattern(m[2]);
       var script = m[3] || m[4] || m[5];
       var requiresBody = /(?:^|,)\s*requires-body\s*=\s*(?:true|1)(?:\s*,|\s*$)/i.test(m[6] || '');
       var action = mode === 'http-response'
@@ -340,11 +516,11 @@
       if (!m) return line;
       var action = m[2];
       if (!/^(?:reject(?:-[\w-]+)?|response-body-json-(?:replace|del|jq)|request-body-json-jq)(?:\s|$)/i.test(action)) return line;
-      return m[1].replace(/\(\?:/g, '(') + ' ' + action;
+      return m[1] + ' ' + action;
     }).join('\n');
   }
   function prepareResourceContent(content, originalURL) {
-    var withLocalDependencies = rewriteDependencies(content, originalURL);
+    var withLocalDependencies = rewriteDependencies(normalizeConditionalRules(content, originalURL), originalURL);
     return normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(withLocalDependencies));
   }
 
@@ -389,7 +565,7 @@
       '<input id="resource-url" name="url" type="url" required style="width:100%;box-sizing:border-box" value="' + escapeHTML(EXAMPLE) + '"><button type="submit">检查此资源</button></form>' +
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
-      '<p>v1.3.0 会在资源解析器之前把旧式 Loon [Script] 规则预转换为 QX 原生 script-* 规则，并把允许范围内的 Kelee JavaScript 依赖改走本机后端。</p>' +
+      '<p>支持旧式 Loon 脚本及 request/response if URL 正则条件下的 script、reject 和 response.json.replace。保留正则分组和 i/m/s 标志，允许范围内的 Kelee JavaScript 依赖走本机后端；不支持的条件动作会返回带行号的转换错误。JSON 规则仍需全局资源解析器。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
@@ -528,6 +704,13 @@
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
       return success;
     } catch (error) {
+      if (error && error.keleeStage === 'resource-conversion') {
+        var conversion = reply(422,'Kelee-QX 资源转换失败\n' + redact(messageOf(error)) +
+          '\n未返回部分成功配置。请保留原配置并提供此行的完整原始规则。');
+        conversion.headers['X-Kelee-QX-Stage'] = 'resource-conversion';
+        conversion.headers['X-Kelee-QX-Upstream-Status'] = '200';
+        return conversion;
+      }
       var failure = reply(502,'Kelee-QX 请求未完成（网络或重定向校验失败）：' + redact(messageOf(error)));
       failure.headers['X-Kelee-QX-Stage'] = 'transport';
       return failure;
@@ -537,7 +720,7 @@
   var exportsAPI = {
     CONFIG: CONFIG, toQX:tools.toQX, extractPlugin:tools.extractPlugin,
     patchPrefixes:patchPrefixes, rewriteResponse:rewriteResponse,
-    rewriteDependencies:rewriteDependencies, normalizeLoonScriptRules:normalizeLoonScriptRules, normalizeSafeLoonRewritePatterns:normalizeSafeLoonRewritePatterns, prepareResourceContent:prepareResourceContent, backendResponse:backendResponse,
+    rewriteDependencies:rewriteDependencies, normalizeConditionalRules:normalizeConditionalRules, normalizeLoonScriptRules:normalizeLoonScriptRules, normalizeSafeLoonRewritePatterns:normalizeSafeLoonRewritePatterns, prepareResourceContent:prepareResourceContent, backendResponse:backendResponse,
     bodyProblem:bodyProblem, browserHelper:browserHelper, createLinkTools:createLinkTools,
     remoteSnippet:remoteSnippet, adapterSource:adapterSource, bootstrapImportURL:bootstrapImportURL
   };
