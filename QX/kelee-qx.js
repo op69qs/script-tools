@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.6.0 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.6.1 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.6.0',
+    version: '1.6.1',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -300,7 +300,11 @@
   function rewriteDependencies(content, originalURL) {
     // Only recognized script declarations. JSON values may literally contain
     // "script-path=...", which must never be interpreted as dependencies.
+    var inComment = false;
     return content.split('\n').map(function (line) {
+      var text = line.trim();
+      if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
+      if (/^\/\*/.test(text)) { inComment = text.indexOf('*/',2) === -1; return line; }
       if (/^\s*(?:#|;|\/\/)/.test(line)) return line;
       if (!/^\s*http-(?:request|response)\s+\S+\s+script-path\s*=/i.test(line) &&
           !/^\s*(?:[\w.-]+\s*=\s*)?type\s*=\s*http-(?:request|response)\b/i.test(line)) return line;
@@ -530,17 +534,48 @@
     }).join('\n');
   }
   function normalizeLoonScriptRules(content) {
-    var section = '';
-    return String(content || '').split('\n').map(function (line) {
+    var section = '', inComment = false;
+    return String(content || '').split('\n').map(function (line, index) {
       var trimmed = line.trim();
+      if (inComment) { if (trimmed.indexOf('*/') !== -1) inComment = false; return line; }
+      if (/^\/\*/.test(trimmed)) { inComment = trimmed.indexOf('*/',2) === -1; return line; }
       if (/^\[[^\]]+\]$/.test(trimmed)) { section = trimmed.toLowerCase(); return line; }
       if (section !== '[script]' || !trimmed || /^(?:#|;|\/\/)/.test(trimmed)) return line;
+      function fail(reason) {
+        var error = new Error('第 ' + (index + 1) + ' 行 ' + section + '：' + reason);
+        error.keleeStage = 'resource-conversion'; error.keleeLine = index + 1;
+        error.keleeSection = section; error.keleeRule = line; throw error;
+      }
       var m = trimmed.match(/^(http-response|http-request)\s+(\S+)\s+script-path\s*=\s*(?:"([^"]+)"|'([^']+)'|([^,\s]+))([\s\S]*)$/i);
-      if (!m) return line;
+      if (!m) {
+        // KOP also accepts named/type= declarations and other option orders,
+        // but may silently discard binary/argument/timeout execution options.
+        if (/^http-(?:request|response)\b|(?:^|[=,])\s*type\s*=\s*http-(?:request|response)\b/i.test(trimmed))
+          fail('旧式脚本声明尚不能完整解析；拒绝让解析器忽略执行选项。');
+        return line;
+      }
       var mode = m[1].toLowerCase();
       var pattern = protectParserPattern(m[2]);
       var script = m[3] || m[4] || m[5];
-      var requiresBody = /(?:^|,)\s*requires-body\s*=\s*(?:true|1)(?:\s*,|\s*$)/i.test(m[6] || '');
+      var rest = (m[6] || '').trim(), seen = Object.create(null), requiresBody = false;
+      while (rest) {
+        var option = rest.match(/^,\s*([a-z][a-z0-9-]*)\s*=\s*/i);
+        if (!option) fail('旧式脚本选项格式无法可靠转换。');
+        var key = option[1].toLowerCase();
+        if (seen[key]) fail('旧式脚本选项重复：' + key);
+        if (key !== 'requires-body' && key !== 'tag') fail('旧式脚本选项尚未适配：' + key + '；未忽略执行条件。');
+        seen[key] = true; rest = rest.slice(option[0].length);
+        if (key === 'requires-body') {
+          var body = rest.match(/^(true|false|1|0)(?=\s*(?:,|$))/i);
+          if (!body) fail('requires-body 必须为 true/false 或 1/0。');
+          requiresBody = /^(?:true|1)$/i.test(body[1]); rest = rest.slice(body[0].length);
+        } else {
+          var tag = rest.match(/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n"'=]+)/);
+          if (!tag) fail('旧式脚本 tag 格式无法识别。');
+          rest = rest.slice(tag[0].length);
+        }
+        rest = rest.trim();
+      }
       var action = mode === 'http-response'
         ? (requiresBody ? 'script-response-body' : 'script-response-header')
         : (requiresBody ? 'script-request-body' : 'script-request-header');
@@ -566,12 +601,19 @@
    * Intersect literal+* NFAs: indices only advance, except the common * loop.
    * Epsilon exits and overlapping literal matches must both be retained.
    */
+  function ruleAnnotation(line) {
+    var match = line.match(/^([ \t]*\{#[^\r\n]*?#\}[ \t]*)([^\r\n]*)\r?$/);
+    return match ? {prefix:match[1],body:match[2],invalid:/^\s*\{#/.test(match[2])} :
+      {prefix:'',body:line,invalid:/^\s*\{#/.test(line)};
+  }
   function normalizeLogicalRules(content, details) {
     var section = '', inComment = false, totalWork = 0, totalRules = 0, totalChars = 0, exhausted = false;
     return String(content || '').split('\n').map(function (line, index) {
       var text = line.trim();
       if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
       if (/^\/\*/.test(text)) { inComment = text.indexOf('*/', 2) === -1; return line; }
+      var annotation = ruleAnnotation(line);
+      text = annotation.body.trim();
       if (/^\[[^\]]+\]$/.test(text)) { section = text.toLowerCase(); return line; }
       if (section !== '[rule]' || !/^(?:AND|OR|NOT)\s*,/i.test(text)) return line;
       var record = {line:index + 1, status:'unsupported', rule:line};
@@ -683,7 +725,7 @@
         if (root.length !== 3 || !/^(?:DIRECT|REJECT|PROXY)$/i.test(root[2]))
           stop('域名逻辑仅验证了 DIRECT/REJECT/PROXY 策略，且不接受额外参数。');
         var globs = compile(root[0] + ',' + root[1],0);
-        var block = globs.length ? globs.map(function (glob) { return 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
+        var block = globs.length ? globs.map(function (glob) { return annotation.prefix + 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
           '# Kelee-QX: domain logic has an empty intersection.';
         if (totalRules + globs.length > 512 || totalChars + block.length > 131072)
           resourceStop('整份资源的域名逻辑输出预算已耗尽，保留剩余原文。');
@@ -699,9 +741,32 @@
     }).join('\n');
   }
   function prepareResourceContent(content, originalURL, logicalDetails) {
-    var withLocalDependencies = rewriteDependencies(normalizeConditionalRules(content, originalURL), originalURL);
-    // Expand logic LAST so DSL diagnostics retain original source line numbers.
-    return normalizeLogicalRules(normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(withLocalDependencies)),logicalDetails);
+    var original = String(content || '').split('\n'), notes = [], section = '', inComment = false;
+    var bare = original.map(function (line, index) {
+      var text = line.trim();
+      notes[index] = '';
+      if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
+      if (/^\/\*/.test(text)) { inComment = text.indexOf('*/',2) === -1; return line; }
+      if (/^\[[^\]]+\]$/.test(text)) section = text.toLowerCase();
+      var annotation = ruleAnnotation(line);
+      if (annotation.invalid) {
+        var error = new Error('第 ' + (index + 1) + ' 行 ' + section + '：规则备注未闭合或包含多个前缀。');
+        error.keleeStage = 'resource-conversion'; error.keleeLine = index + 1;
+        error.keleeSection = section; error.keleeRule = line; throw error;
+      }
+      notes[index] = annotation.prefix;
+      return annotation.body;
+    }).join('\n');
+    try {
+      var dependencies = rewriteDependencies(normalizeConditionalRules(bare,originalURL),originalURL);
+      var normalized = normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(dependencies));
+      // All preceding transforms retain one line per input; expand logic LAST.
+      var annotated = normalized.split('\n').map(function (line,index) { return notes[index] + line; }).join('\n');
+      return normalizeLogicalRules(annotated,logicalDetails);
+    } catch (error) {
+      if (error && error.keleeLine) error.keleeRule = original[error.keleeLine - 1];
+      throw error;
+    }
   }
 
   function bodyProblem(response, kind) {
@@ -748,7 +813,7 @@
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
       '<p>支持旧式 Loon 脚本及 URL 正则条件下的 script、reject、JSON jq/delete 和 response.json.replace。批量删除保持执行顺序，允许范围内的 Kelee JavaScript 依赖走本机后端；未支持的条件动作返回带插件名称、资源 URL、行号和原始规则的转换错误。JSON 规则仍需全局资源解析器。</p>' +
-      '<p>纯 DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD 的 AND/OR 可转为匹配集合相等的 host-wildcard，保留原位置及 DIRECT/REJECT/PROXY 策略。跨客户端优先级仍需实机核验。协议、URL/UA、NOT 等未适配逻辑保留原文，日志以 incomplete 标记缺口；解析器仍可能跳过这些规则。</p>' +
+      '<p>纯 DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD 的 AND/OR 可转为匹配集合相等的 host-wildcard，保留原位置及 DIRECT/REJECT/PROXY 策略，支持 TF 的规则备注前缀。跨客户端优先级仍需实机核验。任一逻辑无法转换时整份资源返回 422，防止解析器跳过 DIRECT 例外后改变策略。未适配的旧式脚本执行选项同样拒绝，日志附原始行号。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
@@ -772,6 +837,7 @@
       if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return; }
       if (/^\/\*/.test(text)) { inComment = text.indexOf('*/',2) === -1; return; }
       if (/^(?:#|;|\/\/)/.test(text)) return;
+      text = ruleAnnotation(text).body.trim();
       if (/^(?:request|response)\s+if\b/i.test(text)) dsl++;
       if (/\surl\s+script-(?:request|response)-(?:body|header)\s/.test(text)) scripts++;
     });
@@ -807,15 +873,15 @@
       record.convertedDSL = before.dsl - after.dsl;
       record.remainingDSL = after.dsl;
       record.scriptRules = after.scripts;
-      if (Array.isArray(logicalDetails) && logicalDetails.length) {
-        record.inputLogical = logicalDetails.length;
-        record.convertedLogical = logicalDetails.filter(function (entry) { return entry.status === 'converted'; }).length;
-        record.pendingLogical = record.inputLogical - record.convertedLogical;
-        record.logicalState = record.pendingLogical ? 'incomplete' : 'matching-set-converted';
-        record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; }).slice(0,10).map(function (entry) {
-          return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
-        });
-      }
+    }
+    if (Array.isArray(logicalDetails) && logicalDetails.length) {
+      record.inputLogical = logicalDetails.length;
+      record.convertedLogical = logicalDetails.filter(function (entry) { return entry.status === 'converted'; }).length;
+      record.pendingLogical = record.inputLogical - record.convertedLogical;
+      record.logicalState = record.pendingLogical ? 'rejected' : 'matching-set-converted';
+      record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; }).slice(0,10).map(function (entry) {
+        return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
+      });
     }
     if (error) {
       record.reason = redact(messageOf(error));
@@ -954,17 +1020,22 @@
       if (problem) return responseError(fetched,kind,CONFIG.loonUA);
       var logicalDetails = [];
       var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url,logicalDetails) : fetched.response.body;
+      var pending = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; });
+      if (pending.length) {
+        var first = pending[0], error = new Error('第 ' + first.line + ' 行 [rule]：尚有 ' + pending.length +
+          ' 条逻辑规则无法等价转换，拒绝提供部分配置。' + first.reason);
+        error.keleeStage = 'resource-conversion'; error.keleeLine = first.line;
+        error.keleeSection = '[rule]'; error.keleeRule = first.rule; throw error;
+      }
       var success = reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
       success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
-      if (kind === 'resource') success.headers['X-Kelee-QX-Conversion'] = logicalDetails.some(function (entry) {
-        return entry.status !== 'converted';
-      }) ? 'incomplete' : 'ready-for-parser';
+      if (kind === 'resource') success.headers['X-Kelee-QX-Conversion'] = 'ready-for-parser';
       traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined,logicalDetails);
       return success;
     } catch (error) {
       if (error && error.keleeStage === 'resource-conversion') {
-        var record = traceResource('resource-conversion',target,fetched,error);
+        var record = traceResource('resource-conversion',target,fetched,error,undefined,logicalDetails);
         var conversion = reply(422,'Kelee-QX 资源转换失败\n' + redact(messageOf(error)) +
           '\n插件：' + record.plugin + ' (' + record.filename + ')' +
           '\n资源：' + record.finalSource + '\n后端版本：' + CONFIG.version +
@@ -972,6 +1043,7 @@
           '\n\n诊断报告（与 QX 日志相同）：\n' + JSON.stringify(record,null,2) +
           '\n未返回部分成功配置。请保留原配置，反馈时附上这份诊断报告。');
         conversion.headers['X-Kelee-QX-Stage'] = 'resource-conversion';
+        conversion.headers['X-Kelee-QX-Conversion'] = 'rejected';
         conversion.headers['X-Kelee-QX-Upstream-Status'] = String(record.upstreamStatus || 0);
         return conversion;
       }

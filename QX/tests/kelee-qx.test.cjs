@@ -150,14 +150,14 @@ test('expanded logical rules do not shift an unsupported DSL source line in diag
     '[Rewrite]\nrequest if ${url} ~= /^https:\\/\\/example\\.com/ then unknown()';
   assert.throws(()=>api.prepareResourceContent(input,sourceURL),error=>error.keleeLine===4);
 });
-test('backend marks unconverted logical rules as gaps and logs their original source line',async()=>{
+test('backend rejects unconverted logical rules and logs their original source line',async()=>{
   const body='#!name=example\n[Rule]\nAND, ((DOMAIN, example.com), (PROTOCOL, QUIC)), REJECT';
   const logs=[],context={module:{exports:{}},console:{log:value=>logs.push(value)}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'..','kelee-qx.js'),'utf8'),context);
   const response=await context.module.exports.backendResponse({url:'http://127.0.0.1:9999/kelee-qx/resource?url='+encodeURIComponent(sourceURL)},
     async()=>({statusCode:200,headers:{},body}));
-  assert.match(response.status,/200/);
-  assert.equal(response.headers['X-Kelee-QX-Conversion'],'incomplete');
+  assert.match(response.status,/422/);
+  assert.equal(response.headers['X-Kelee-QX-Conversion'],'rejected');
   const record=logs.map(value=>String(value)).find(value=>value.includes('"pendingLogical":1'));
   assert.ok(record && record.includes('"line":3') && record.includes('QUIC'));
 });
@@ -170,13 +170,14 @@ test('pending logical diagnostics redact credentials before logging',async()=>{
   assert.ok(logs.some(value=>String(value).includes('pendingLogicalExamples')));
   assert.ok(!logs.some(value=>String(value).includes('private-token')));
 });
-test('regex query diagnostics hide arbitrary query values without changing the resource',async()=>{
+test('regex query diagnostics hide arbitrary query values in a rejected resource',async()=>{
   const body='[Rule]\nAND, ((URL-REGEX, ^https:\\/\\/example\\.com\\/callback\\?code=OAUTH_SECRET&opaque=OTHER_SECRET), (USER-AGENT, App*)), DIRECT';
   const logs=[],context={module:{exports:{}},console:{log:value=>logs.push(value)}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'..','kelee-qx.js'),'utf8'),context);
   const response=await context.module.exports.backendResponse({url:'http://127.0.0.1:9999/kelee-qx/resource?url='+encodeURIComponent(sourceURL)},
     async()=>({statusCode:200,headers:{},body}));
-  assert.equal(response.body,body);
+  assert.match(response.status,/422/);
+  assert.ok(!/OAUTH_SECRET|OTHER_SECRET/.test(response.body));
   assert.ok(!logs.some(value=>/OAUTH_SECRET|OTHER_SECRET/.test(String(value))));
 });
 test('Spotify-style URL replacement diagnoses the connection-target gap',()=>{

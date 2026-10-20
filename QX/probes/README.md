@@ -4,7 +4,13 @@
 
 ## 手动测试
 
-在 QX 重写引用中单独添加以下一行，保持 opt-parser=false：
+在 QX 的重写资源列表点添加，**地址栏只粘贴下面这个网址**，不要带逗号或参数：
+
+    https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target.snippet
+
+名称填“TF URL 探针”，关闭该资源的“资源解析器”开关，启用后保存并更新一次。若在地址栏粘贴带 tag、opt-parser 的整条配置行，可能提示“资源无效”。
+
+只有直接编辑主配置文件的 [rewrite_remote] 时，才使用下面这一整行：
 
     https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target.snippet, tag=Kelee-QX TF URL 探针, opt-parser=false, update-interval=86400, enabled=true
 
