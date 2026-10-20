@@ -16,11 +16,24 @@
 
 这个独立订阅声明的 MitM 主机是 httpbin.org、www.cloudflare.com。测试需要现有 QX MitM 和证书正常工作；测试后禁用或删除该探针订阅。它不修改生产订阅，也不自动打开任何网络地址。
 
+## v2：已有首轮结果时
+
+首轮在 TF build953 已观察到对照与同源成功，跨主机显示 Not Found。已有这三个结果时，不必重复前两项：先在 QX 更新“TF URL 探针”资源，随后用 Safari 依次打开：
+
+1. [只改 URL](https://httpbin.org/anything/kelee-qx-url-target-probe?mode=cross-host&id=qx953-v2-cross)
+2. [改 URL 并设置 Host](https://httpbin.org/anything/kelee-qx-url-target-probe?mode=cross-host-header&id=qx953-v2-host)
+
+v2 增加“原主机＋目标路径”的响应匹配，尝试让先前无报告的 404 也显示 JSON。第二项会移除原有 Host/authority、Cookie、Authorization、Proxy-Authorization，再设置固定目标 Host，不记录这些头部。脚本使用新文件名和 v2 编号，区分旧缓存结果。请复制这两份 JSON；若仍无报告，说明对应编号和页面现象即可。
+
+observedURLKind 的 source、partial、target 只代表响应脚本看到的固定 URL 形态；不能单独证明连接目的地、SNI 或路由策略。notFoundTemplateObserved 只说明看到了相似的 404 模板，不证明服务身份。
+
+## 首次测试或排查装载
+
 先确认在 Safari 打开 https://www.cloudflare.com/cdn-cgi/trace 能正常显示文本，再依次打开：
 
-1. 对照：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=control&id=qx953-control
-2. 同源：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=same-origin&id=qx953-same
-3. 跨主机：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=cross-host&id=qx953-cross
+1. 对照：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=control&id=qx953-v2-control
+2. 同源：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=same-origin&id=qx953-v2-same
+3. 跨主机：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=cross-host&id=qx953-v2-cross
 
 页面应显示 JSON 报告。只需复制这三份报告；不要复制 Cloudflare 原始 trace 或完整抓包，它们可能带有 IP。若页面没有报告，在 QX 日志中查找 Kelee-QX probe 及对应 probeId；request 和 response 分别记同一个编号。
 
