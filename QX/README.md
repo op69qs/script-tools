@@ -21,11 +21,13 @@
 - 域名与 `PROTOCOL, QUIC` 的交集：不能用全局关闭 QUIC 替代。
 - `URL-REGEX` 与 `USER-AGENT` 的分流组合：`url-and-header` 可表达匹配交集，但尚未验证分流策略和优先级的等价转换，尤其是 `DIRECT` 例外。
 - `NOT`、其他谓词、额外标记、未验证策略：整体拒绝并报告缺口。
-- Spotify：跨主机 `url.replace` 尚无已验证的 QX 等价实现，插件继续整体返回 HTTP 422。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。带参数二进制脚本也未在本版加入兼容层。
+- Spotify：跨主机 `url.replace` 尚无已验证的 QX 等价实现，插件继续整体返回 HTTP 422。手机 TF 953 测试中，只改 URL 和 URL＋Host 两种写法均返回 404；后者显示目标 URL 形态仍不代表连接已经迁移。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。带参数二进制脚本、超时及全 spotify.com 后缀的 QUIC 组合也未完成等价适配。
 
 v1.6.0 的 HTTP 200 / incomplete 仍会让解析器跳过逻辑。本次已复现 HTTPDNS 的 DIRECT 例外丢失后落入更宽 REJECT 的反例，因此改成整体 422，响应带有 `X-Kelee-QX-Conversion: rejected`。QX 日志和错误正文记录 `pendingLogical`、插件、来源、原始行号、原因及脱敏规则摘要。后端拒绝不完整替换，不承诺客户端遇到更新失败后的缓存行为。
 
 本轮 11 份上游资源中，7 份通过文本转换与真实 KOP 解析，4 份拒绝：RedPaper、PinDuoDuo、Block_HTTPDNS 合计仍有 6 条未证明等价的逻辑，Spotify 仍有 URL 改写及二进制执行缺口。这些缺口没有被删掉或拆开。BlockAdvertisers 的 4 条纯域名组合已转成 11 条交集分支。
+
+手机上这四份显示“Status code 422”与上述拒绝一致，表示仍未完整适配。六条计数不包含 Spotify 自己的另一条域名/QUIC 组合；其首个 URL 转换错误会先终止检查。详见[四个 422 的原因和实机记录](compatibility-research-2026-10-20.md#手机截图中的四个-422)。
 
 TF 变化、仍在维护的脚本及等价性分析见[研究记录](compatibility-research-2026-10-20.md)。Spotify 原生 URL 行为可用[独立手机探针](probes/README.md)验证；探针需手动启用，不随生产订阅安装。
 

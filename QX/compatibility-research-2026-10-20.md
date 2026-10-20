@@ -40,7 +40,35 @@ Kelee 源包含命名正则捕获、跨主机 `url.replace`、后续响应脚本
 
 本仓库提供[独立 TF URL 探针](probes/README.md)，分对照、同主机、跨主机三项；只返回固定目标，无 fetch、302 或补偿请求。它只输出选定的响应证据，所有报告的 `provesFullEquivalence` 均为 false。需要对应 request/response 日志和手机结果后，才能设计下一层验证；直接访问目标 URL 得到的报告不能单独证明发生过跨主机修改。
 
-首轮用户实测环境为 `iOS 27.0.1 v1.9.0-build953`：对照返回 200 / control-origin-observed；同主机返回 200 / same-origin-path-observed；跨主机显示 Not Found，没有探针 JSON。前两项证实该设备可执行探针及同源路径修改；第三项仍需区分路径变化、原连接主机和响应规则是否匹配，不能据此宣布跨主机接口支持或不支持。
+用户实测环境为 `iOS 27.0.1 v1.9.0-build953`，结果如下：
+
+| 操作 | 探针版本 | observedURLKind | 状态 | 选定响应证据 |
+| --- | --- | --- | --- | --- |
+| 对照 | v1 | 未记录此字段 | 200 | 原端点 JSON 可识别。 |
+| 同主机 URL 修改 | v1 | 未记录此字段 | 200 | 修改后的路径与查询被目标端点回显。 |
+| 跨主机，只返回 url | v2 | partial | 404 | Not Found 模板；无目标服务特征。 |
+| 跨主机，返回 url 并修改 Host | v2 | target | 404 | Not Found 模板；无目标服务特征。 |
+
+对照与同源成功证实设备可执行探针及同源路径修改。只改 url 时看到“原主机＋新路径”；加 Host 后看到 target 形态，但该字段来自响应脚本的 `$request.url`，不是连接目的 IP、TLS SNI 或所用策略的证据。两次 404 均保持 inconclusive；相同错误模板不能证明服务身份，显示 target 也不能作为跨主机改写成功的依据。
+
+这组结果尚未得到用户网络中“直接访问 Cloudflare 目标”的对照，不能排除目标自身可达性或服务响应差异。目前两种已测写法均没有得到成功迁移到目标服务的证据，生产适配器继续拒绝 Spotify。此结论仅限上述实测写法，不宣称 QX 所有跨主机实现都不可能。
+
+Spotify 不止这一处阻断：上游第 18 行还有 `spotify.com 后缀 AND QUIC → REJECT`，原 MitM 仅覆盖 spclient 相关主机，不能以其自动 QUIC enforcement 替换整个后缀；二进制脚本仍带自定义参数和超时要求。即使 URL 探针成功，也不能单凭这一项解除整份插件的 422。“剩余六条”仅计 RedPaper、PinDuoDuo、Block_HTTPDNS 三份，未包含 Spotify 的这条 QUIC 逻辑。
+
+## 手机截图中的四个 422
+
+v1.6.1 后端在任一规则无法完整转换时主动返回 422，截图中的四份与本轮联网验证一致：
+
+| 资源 | 首个已知阻断 | 后续已知缺口 |
+| --- | --- | --- |
+| RedPaper_remove_ads | 第 14 行，xiaohongshu.com 后缀与 QUIC 的交集 | 无已验证的全范围等价方案。 |
+| PinDuoDuo_remove_ads | 第 14 行，URL 与 UA 的 REJECT 组合 | 另一条 URL/UA 组合及精确域名/QUIC 组合，合计 3 条。 |
+| Spotify_remove_ads | 第 23 行，跨主机 url.replace | 二进制参数、超时及第 18 行的全后缀 QUIC 逻辑。 |
+| Block_HTTPDNS | 第 22 行，URL 与 UA 的 DIRECT 例外 | 共 2 条 DIRECT 例外，不能删除后继续交付宽泛 REJECT。 |
+
+上游文件下载在验证时为 HTTP 200，422 来自本机转换检查。它表示这四份仍未完整适配，不是可忽略的成功提示。后端错误正文和 QX 日志已有插件、来源、原始行号与脱敏规则；没有把未适配规则改成独立条件，也没有伪装返回 200。
+
+原生 `url-and-header` 能匹配 URL 和请求头的交集，并不自动提供分流层 DIRECT 策略。[官方 opts.policy 示例](https://github.com/crossutility/Quantumult-X/blob/master/sample-fetch-opts-policy.js)针对 `$task.fetch` 创建的新请求，且说明连接复用行为不同，不能据此把原连接的 DIRECT 例外改成脚本重发。
 
 QX 原生支持二进制 bodyBytes；当前维护的 protobuf 脚本也有 QX 专门分支。通用兼容层还须处理输入 Uint8Array/ArrayBuffer、输出视图偏移及参数注入，不能静默删除 `binary-body-mode` 或 `argument`。本版对未完整适配的旧式执行选项及声明形态整体拒绝。
 

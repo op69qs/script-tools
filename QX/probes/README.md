@@ -27,6 +27,12 @@ v2 增加“原主机＋目标路径”的响应匹配，尝试让先前无报�
 
 observedURLKind 的 source、partial、target 只代表响应脚本看到的固定 URL 形态；不能单独证明连接目的地、SNI 或路由策略。notFoundTemplateObserved 只说明看到了相似的 404 模板，不证明服务身份。
 
+## 已收到的 TF 953 结果
+
+用户实测：v1 对照 200，同源修改 200；v2 只改 URL 得到 partial / 404，URL＋Host 得到 target / 404。两项都观察到 Not Found 模板，没有目标服务特征，结论保持 inconclusive。显示 target 不能当作跨主机连接成功。
+
+如果还缺目标自身的访问对照，可保持探针开启，直接打开[固定 Cloudflare 目标](https://www.cloudflare.com/cdn-cgi/trace?kelee_qx_probe=cross-host-header&id=qx953-v2-host)，并明确标注为“直接目标对照”。这里不会执行请求改写，只复用响应报告；编号与 Host 对照相同，必须结合操作说明和时间区分，不能将这份报告作为改写成功的证据。无需新增探针版本或改动生产订阅。
+
 ## 首次测试或排查装载
 
 先确认在 Safari 打开 https://www.cloudflare.com/cdn-cgi/trace 能正常显示文本，再依次打开：
