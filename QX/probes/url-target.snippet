@@ -1,0 +1,7 @@
+# Opt-in TF diagnostic only. Import separately with opt-parser=false.
+# These two MitM hosts are added only by enabling THIS diagnostic subscription.
+hostname = httpbin.org, www.cloudflare.com
+^https://httpbin\.org(?::443)?/anything/kelee-qx-url-target-probe\?mode=(?:control|same-origin|cross-host)&id=qx953-(?:control|same|cross)$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target-request.js
+^https://httpbin\.org(?::443)?/anything/kelee-qx-url-target-probe\?mode=(?:control|same-origin|cross-host)&id=qx953-(?:control|same|cross)$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target-response.js
+^https://httpbin\.org(?::443)?/anything/kelee-qx-url-target-result\?kelee_qx_probe=same-origin&id=qx953-same$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target-response.js
+^https://www\.cloudflare\.com(?::443)?/cdn-cgi/trace\?kelee_qx_probe=cross-host&id=qx953-cross$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target-response.js

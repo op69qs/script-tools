@@ -1,0 +1,29 @@
+# TF 原生 URL 返回接口探针
+
+用于核实当前 TF 对 $done({url}) 的行为，不是 Spotify 去广告规则。它只使用固定测试 URL，不使用重定向或重新发请求作补偿。主适配器和 remoteSnippet 不会安装或启用它。
+
+## 手动测试
+
+在 QX 重写引用中单独添加以下一行，保持 opt-parser=false：
+
+    https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/url-target.snippet, tag=Kelee-QX TF URL 探针, opt-parser=false, update-interval=86400, enabled=true
+
+这个独立订阅声明的 MitM 主机是 httpbin.org、www.cloudflare.com。测试需要现有 QX MitM 和证书正常工作；测试后禁用或删除该探针订阅。它不修改生产订阅，也不自动打开任何网络地址。
+
+先确认在 Safari 打开 https://www.cloudflare.com/cdn-cgi/trace 能正常显示文本，再依次打开：
+
+1. 对照：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=control&id=qx953-control
+2. 同源：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=same-origin&id=qx953-same
+3. 跨主机：https://httpbin.org/anything/kelee-qx-url-target-probe?mode=cross-host&id=qx953-cross
+
+页面应显示 JSON 报告。只需复制这三份报告；不要复制 Cloudflare 原始 trace 或完整抓包，它们可能带有 IP。若页面没有报告，在 QX 日志中查找 Kelee-QX probe 及对应 probeId；request 和 response 分别记同一个编号。
+
+## 判断范围
+
+- control-origin-observed：对照端点响应可识别。
+- same-origin-path-observed：响应中观察到修改后的同源路径和查询。
+- target-service-signature-observed：观察到目标服务预定的 h、https、tls 特征，只是跨主机请求的候选证据。
+- original-endpoint-observed：仍收到原端点可识别的响应。
+- inconclusive、超时或无报告：未得到结论；可能涉及网络、MitM、脚本匹配或接口行为，不能直接判定接口不支持。
+
+报告不记录原始正文、IP、Cookie 或请求头。任何结果的 provesFullEquivalence 均为 false：一次 GET 无法证明全部 TLS、连接复用、路由策略、认证、原方法/正文、未匹配后缀和后续脚本行为，因此不会据此自动解除 Spotify 的转换拒绝。
