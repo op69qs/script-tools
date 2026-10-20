@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.5.0 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.6.0 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -8,7 +8,7 @@
  * 1. Rewrite the hub's standard Loon installation links.
  * 2. Serve a local installation fallback/status page (script-echo-response).
  * 3. Fetch allow-listed resources and Kelee JavaScript dependencies (http_backend).
- * 4. Normalize old Loon scripts and conditional request/response rules before the resource parser sees them.
+ * 4. Normalize Loon scripts, conditional rewrites and positive domain logic before the resource parser sees them.
  *
  * This is an installer/download adapter, NOT a Loon engine or LPX decryptor.
  * The global resource parser still has to convert the fetched configuration.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.5.0',
+    version: '1.6.0',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -388,8 +388,11 @@
         at += value.length;
       }
       var then = text.slice(at).match(/^\s+then\s+/i);
-      if (!then && /^\s+as\s+[a-z_]\w*\s+then\b/i.test(text.slice(at)))
-        fail('命名 URL 捕获（as）及其 URL 替换尚无已验证的等价 QX 转换；未改成重定向，也未删除此规则。');
+      var urlReplaceReason = 'url.replace（包括 as 捕获）需要保持连接目标主机、TLS 及匹配范围外的后缀；QX 公开接口尚无已验证的等价转换。';
+      if (!then && /^\s+as\s+[a-z_]\w*\s+then\b/i.test(text.slice(at))) {
+        if (/\bthen\s+url\.replace\s*\(/i.test(text.slice(at))) fail(urlReplaceReason);
+        fail('命名 URL 捕获（as）尚无已验证的等价转换。');
+      }
       if (!then) fail('正则后仅支持 then，不支持附加条件。');
       at += then[0].length;
       function value(depth) {
@@ -436,6 +439,7 @@
       var action = text.slice(at).match(/^([a-z_][a-z0-9_.]*)\s*\(/i);
       if (!action) fail('未识别的条件动作。');
       var name = action[1]; at += action[0].length;
+      if (name === 'url.replace') fail(urlReplaceReason);
       var jsonAction = name.match(/^(request|response)\.json\.(jq|delete)$/);
       if (jsonAction) {
         if (mode !== jsonAction[1]) fail('JSON 动作与 request/response 阶段不一致。');
@@ -556,9 +560,148 @@
       return m[1] + ' ' + action;
     }).join('\n');
   }
-  function prepareResourceContent(content, originalURL) {
+  /**
+   * Compile positive domain logic in the domain layer, never as URL rewrites.
+   * A union of output globs denotes the SAME set as the input predicate.
+   * Intersect literal+* NFAs: indices only advance, except the common * loop.
+   * Epsilon exits and overlapping literal matches must both be retained.
+   */
+  function normalizeLogicalRules(content, details) {
+    var section = '', inComment = false, totalWork = 0, totalRules = 0, totalChars = 0, exhausted = false;
+    return String(content || '').split('\n').map(function (line, index) {
+      var text = line.trim();
+      if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
+      if (/^\/\*/.test(text)) { inComment = text.indexOf('*/', 2) === -1; return line; }
+      if (/^\[[^\]]+\]$/.test(text)) { section = text.toLowerCase(); return line; }
+      if (section !== '[rule]' || !/^(?:AND|OR|NOT)\s*,/i.test(text)) return line;
+      var record = {line:index + 1, status:'unsupported', rule:line};
+      try {
+        var budget = 0, nodes = 0;
+        function stop(reason) { throw new Error(reason); }
+        function resourceStop(reason) { exhausted = true; stop(reason); }
+        function spend() {
+          if (++totalWork > 100000) resourceStop('整份资源的域名逻辑计算预算已耗尽，保留剩余原文。');
+          if (++budget > 20000) stop('域名逻辑计算超过工作量限制，未输出部分分支。');
+        }
+        function split(value) {
+          var fields = [], start = 0, depth = 0, quote = '', escaped = false;
+          for (var i = 0; i < value.length; i++) {
+            var c = value.charAt(i);
+            if (escaped) { escaped = false; continue; }
+            if (c === '\\') { escaped = true; continue; }
+            if (quote) { if (c === quote) quote = ''; continue; }
+            if (c === '"' || c === "'") { quote = c; continue; }
+            if (c === '(') depth++;
+            else if (c === ')') { if (--depth < 0) stop('逻辑规则括号不平衡。'); }
+            else if (c === ',' && depth === 0) { fields.push(value.slice(start,i).trim()); start = i + 1; }
+          }
+          if (depth || quote || escaped) stop('逻辑规则括号、引号或转义未闭合。');
+          fields.push(value.slice(start).trim());
+          return fields;
+        }
+        function unwrap(value) {
+          if (value.charAt(0) !== '(' || value.charAt(value.length - 1) !== ')') stop('逻辑子规则必须用括号包围。');
+          return value.slice(1,-1);
+        }
+        function unique(values) {
+          var seen = Object.create(null), out = [];
+          values.forEach(function (value) {
+            spend();
+            value = value.replace(/\*+/g,'*');
+            if (value.length > 256) stop('域名通配符超过长度限制。');
+            if (!Object.prototype.hasOwnProperty.call(seen,value)) {
+              seen[value] = true; out.push(value);
+              if (out.length > 128) stop('域名逻辑展开超过 128 条，未输出部分分支。');
+            }
+          });
+          return out;
+        }
+        function intersect(p, q) {
+          if (p === q) return [p];
+          var memo = Object.create(null), states = 0;
+          function visit(i, j) {
+            var key = i + ':' + j;
+            if (Object.prototype.hasOwnProperty.call(memo,key)) return memo[key];
+            spend();
+            if (++states > 4096) stop('域名逻辑乘积超过状态限制。');
+            var result;
+            if (i === p.length) result = /^\**$/.test(q.slice(j)) ? [''] : [];
+            else if (j === q.length) result = /^\**$/.test(p.slice(i)) ? [''] : [];
+            else {
+              var a = p.charAt(i), b = q.charAt(j);
+              if (a === '*' && b === '*') {
+                result = unique(visit(i + 1,j).concat(visit(i,j + 1))).map(function (tail) { return '*' + tail; });
+              } else if (a === '*') {
+                result = visit(i + 1,j).concat(visit(i,j + 1).map(function (tail) { return b + tail; }));
+              } else if (b === '*') {
+                result = visit(i,j + 1).concat(visit(i + 1,j).map(function (tail) { return a + tail; }));
+              } else result = a === b ? visit(i + 1,j + 1).map(function (tail) { return a + tail; }) : [];
+            }
+            memo[key] = unique(result);
+            return memo[key];
+          }
+          return visit(0,0);
+        }
+        function compile(value, depth) {
+          if (depth > 16 || ++nodes > 128) stop('域名逻辑嵌套或节点数量超过限制。');
+          var fields = split(value), kind = fields[0].toUpperCase();
+          if (kind === 'NOT') stop('NOT 的补集尚无已验证的主机通配符转换，保留原规则。');
+          if (kind === 'AND' || kind === 'OR') {
+            if (fields.length !== 2) stop('逻辑节点含额外参数。');
+            var children = split(unwrap(fields[1]));
+            if (!children.length || !children[0]) stop('逻辑子规则不能为空。');
+            // Compile every child, even an unreachable one, before claiming support.
+            var sets = children.map(function (child) { return compile(unwrap(child),depth + 1); });
+            if (kind === 'OR') return unique([].concat.apply([],sets));
+            var result = sets[0];
+            for (var n = 1; n < sets.length; n++) {
+              var next = [];
+              result.forEach(function (a) {
+                sets[n].forEach(function (b) { spend(); next = unique(next.concat(intersect(a,b))); });
+              });
+              result = next;
+            }
+            return result;
+          }
+          if (!/^DOMAIN(?:-SUFFIX|-KEYWORD)?$/.test(kind)) {
+            if (kind === 'PROTOCOL') stop('协议与域名的交集没有已验证的 QX 分流语法；不能用全局关闭 QUIC 替代。');
+            if (kind === 'URL-REGEX' || kind === 'USER-AGENT')
+              stop('URL/User-Agent 分流组合不能仅凭 url-and-header 保证策略及优先级等价，保留原规则。');
+            stop('逻辑子规则类型尚未适配：' + kind.slice(0,40));
+          }
+          if (fields.length !== 2) stop('域名子规则含额外参数。');
+          var literal = fields[1].replace(/^(["'])([\s\S]*)\1$/,'$2').toLowerCase();
+          if (!literal || literal.length > 128 || !/^[a-z0-9_.-]+$/.test(literal))
+            stop('域名逻辑仅接受 ASCII 字面量；不能把特殊字符当作通配符。');
+          if (kind !== 'DOMAIN-KEYWORD' && !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/.test(literal))
+            stop('域名或后缀格式无效。');
+          return kind === 'DOMAIN' ? [literal] : kind === 'DOMAIN-SUFFIX' ? [literal,'*.' + literal] : ['*' + literal + '*'];
+        }
+        if (exhausted) stop('整份资源的域名逻辑预算已耗尽，保留剩余原文。');
+        if (text.length > 8192) stop('逻辑规则超过长度限制。');
+        var root = split(text);
+        if (root.length !== 3 || !/^(?:DIRECT|REJECT|PROXY)$/i.test(root[2]))
+          stop('域名逻辑仅验证了 DIRECT/REJECT/PROXY 策略，且不接受额外参数。');
+        var globs = compile(root[0] + ',' + root[1],0);
+        var block = globs.length ? globs.map(function (glob) { return 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
+          '# Kelee-QX: domain logic has an empty intersection.';
+        if (totalRules + globs.length > 512 || totalChars + block.length > 131072)
+          resourceStop('整份资源的域名逻辑输出预算已耗尽，保留剩余原文。');
+        totalRules += globs.length; totalChars += block.length;
+        record.status = 'converted'; record.outputRules = globs.length;
+        if (Array.isArray(details)) details.push(record);
+        return block;
+      } catch (error) {
+        record.reason = messageOf(error);
+        if (Array.isArray(details)) details.push(record);
+        return line; // The parser may skip it; report the gap, never claim equivalence.
+      }
+    }).join('\n');
+  }
+  function prepareResourceContent(content, originalURL, logicalDetails) {
     var withLocalDependencies = rewriteDependencies(normalizeConditionalRules(content, originalURL), originalURL);
-    return normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(withLocalDependencies));
+    // Expand logic LAST so DSL diagnostics retain original source line numbers.
+    return normalizeLogicalRules(normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(withLocalDependencies)),logicalDetails);
   }
 
   function bodyProblem(response, kind) {
@@ -605,6 +748,7 @@
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
       '<p>支持旧式 Loon 脚本及 URL 正则条件下的 script、reject、JSON jq/delete 和 response.json.replace。批量删除保持执行顺序，允许范围内的 Kelee JavaScript 依赖走本机后端；未支持的条件动作返回带插件名称、资源 URL、行号和原始规则的转换错误。JSON 规则仍需全局资源解析器。</p>' +
+      '<p>纯 DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD 的 AND/OR 可转为匹配集合相等的 host-wildcard，保留原位置及 DIRECT/REJECT/PROXY 策略。跨客户端优先级仍需实机核验。协议、URL/UA、NOT 等未适配逻辑保留原文，日志以 incomplete 标记缺口；解析器仍可能跳过这些规则。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */
@@ -635,6 +779,9 @@
   }
   function redactRule(value) {
     return redact(value)
+      // Regex-escaped URL queries can contain arbitrary keys, not just token.
+      // Hide the remainder conservatively in diagnostics; never edit the rule.
+      .replace(/\\\?[\s\S]*/, '\\?[query and following text redacted]')
       // Unsupported DSL may contain credentials in header conditions.
       .replace(/(\$\{[^}\r\n]*\b(?:cookie|authorization|api[_-]?key|token|secret|password|session)[^}\r\n]*\}\s*(?:===?|!==?|~=|=~)\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,)]+)/gi, '$1"[redacted]"')
       // Cover JSON/object keys, including keys inside escaped string literals.
@@ -642,7 +789,7 @@
       // Regex literals escape assignments (e.g. token\=...), unlike URLs.
       .replace(/(\b(?:token|access_token|api_key|apikey|key|secret|password|auth|authorization|cookie|session|signature|sig)\\[=:])[^/\r\n]*/gi, '$1[redacted]');
   }
-  function traceResource(stage, target, fetched, error, output) {
+  function traceResource(stage, target, fetched, error, output, logicalDetails) {
     var source = fetched && fetched.url || target;
     var parsed = tools.parseURL(source);
     var filename = parsed ? parsed.path.split('/').pop() : 'Unknown';
@@ -660,6 +807,15 @@
       record.convertedDSL = before.dsl - after.dsl;
       record.remainingDSL = after.dsl;
       record.scriptRules = after.scripts;
+      if (Array.isArray(logicalDetails) && logicalDetails.length) {
+        record.inputLogical = logicalDetails.length;
+        record.convertedLogical = logicalDetails.filter(function (entry) { return entry.status === 'converted'; }).length;
+        record.pendingLogical = record.inputLogical - record.convertedLogical;
+        record.logicalState = record.pendingLogical ? 'incomplete' : 'matching-set-converted';
+        record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; }).slice(0,10).map(function (entry) {
+          return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
+        });
+      }
     }
     if (error) {
       record.reason = redact(messageOf(error));
@@ -796,11 +952,15 @@
       var fetched = await fetchAllowed(target,kind,CONFIG.loonUA,fetcher);
       var problem = bodyProblem(fetched.response,kind);
       if (problem) return responseError(fetched,kind,CONFIG.loonUA);
-      var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url) : fetched.response.body;
+      var logicalDetails = [];
+      var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url,logicalDetails) : fetched.response.body;
       var success = reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
       success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
-      traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined);
+      if (kind === 'resource') success.headers['X-Kelee-QX-Conversion'] = logicalDetails.some(function (entry) {
+        return entry.status !== 'converted';
+      }) ? 'incomplete' : 'ready-for-parser';
+      traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined,logicalDetails);
       return success;
     } catch (error) {
       if (error && error.keleeStage === 'resource-conversion') {
