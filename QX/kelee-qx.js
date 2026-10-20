@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.4.0 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.4.1 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.4.0',
+    version: '1.4.1',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -355,6 +355,9 @@
       function fail(reason) {
         var error = new Error('第 ' + (index + 1) + ' 行 ' + section + '：' + reason);
         error.keleeStage = 'resource-conversion';
+        error.keleeLine = index + 1;
+        error.keleeSection = section;
+        error.keleeRule = line;
         throw error;
       }
       var head = text.match(/^(request|response)\s+if\s+\$\{url\}\s*~=\s*/i);
@@ -582,6 +585,64 @@
     var p = tools.parseURL(value);
     return p ? p.scheme + '://' + p.authority + p.path + (p.query ? '?[redacted]' : '') : '[invalid URL]';
   }
+  function resourceRuleCounts(content) {
+    var dsl = 0, scripts = 0, inComment = false;
+    String(content || '').split('\n').forEach(function (line) {
+      var text = line.trim();
+      if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return; }
+      if (/^\/\*/.test(text)) { inComment = text.indexOf('*/',2) === -1; return; }
+      if (/^(?:#|;|\/\/)/.test(text)) return;
+      if (/^(?:request|response)\s+if\b/i.test(text)) dsl++;
+      if (/\surl\s+script-(?:request|response)-(?:body|header)\s/.test(text)) scripts++;
+    });
+    return {dsl:dsl, scripts:scripts};
+  }
+  function redactRule(value) {
+    return redact(value)
+      // Unsupported DSL may contain credentials in header conditions.
+      .replace(/(\$\{[^}\r\n]*\b(?:cookie|authorization|api[_-]?key|token|secret|password|session)[^}\r\n]*\}\s*(?:===?|!==?|~=|=~)\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,)]+)/gi, '$1"[redacted]"')
+      // Cover JSON/object keys, including keys inside escaped string literals.
+      .replace(/((?:\\?["'])(?:token|access_token|api_key|apikey|key|secret|password|auth|authorization|cookie|session|signature|sig)(?:\\?["'])\s*:\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\s}\]]+)/gi, '$1"[redacted]"')
+      // Regex literals escape assignments (e.g. token\=...), unlike URLs.
+      .replace(/(\b(?:token|access_token|api_key|apikey|key|secret|password|auth|authorization|cookie|session|signature|sig)\\[=:])[^/\r\n]*/gi, '$1[redacted]');
+  }
+  function traceResource(stage, target, fetched, error, output) {
+    var source = fetched && fetched.url || target;
+    var parsed = tools.parseURL(source);
+    var filename = parsed ? parsed.path.split('/').pop() : 'Unknown';
+    try { filename = decodeURIComponent(filename); } catch (_) {}
+    var body = fetched && fetched.response && fetched.response.body || '';
+    var name = body.match(/^\s*#!name\s*=\s*([^\r\n]*)/im);
+    var record = {version:CONFIG.version,stage:stage,
+      plugin:redact(name && name[1].trim() || filename).slice(0,160),
+      filename:redact(filename).slice(0,160),
+      source:safeURL(target),finalSource:safeURL(source)};
+    if (fetched) record.upstreamStatus = Number(fetched.response.statusCode || 0);
+    if (typeof output === 'string') {
+      var before = resourceRuleCounts(body), after = resourceRuleCounts(output);
+      record.inputDSL = before.dsl;
+      record.convertedDSL = before.dsl - after.dsl;
+      record.remainingDSL = after.dsl;
+      record.scriptRules = after.scripts;
+    }
+    if (error) {
+      record.reason = redact(messageOf(error));
+      if (error.keleeLine) {
+        record.line = error.keleeLine;
+        record.section = error.keleeSection;
+        var rule = redactRule(error.keleeRule || '');
+        record.truncated = rule.length > 2048;
+        record.rule = rule.slice(0,2048);
+      }
+    }
+    // Same structured record goes to QX logs and, on conversion failure,
+    // the HTTP error body. Never log the entire plugin or URL query secrets.
+    try {
+      if (typeof console !== 'undefined' && typeof console.log === 'function')
+        console.log('[Kelee-QX ' + CONFIG.version + '] ' + JSON.stringify(record));
+    } catch (_) { /* Diagnostic logging must never change a resource response. */ }
+    return record;
+  }
   function selectedHeaders(headers) {
     var result = {};
     ['content-type','server','cf-ray','cf-mitigated','retry-after'].forEach(function (name) {
@@ -694,6 +755,7 @@
     if (!target || !tools.allowed(target,kind)) return reply(400,'目标不在允许的 kelee.one 插件/脚本资源范围内。');
     if (typeof fetcher !== 'function') return reply(502,'QX $task.fetch 不可用。请检查 http_backend 配置。');
     if (p.path === '/kelee-qx/diagnose') return diagnose(target,fetcher);
+    traceResource('download-start',target);
     try {
       var fetched = await fetchAllowed(target,kind,CONFIG.loonUA,fetcher);
       var problem = bodyProblem(fetched.response,kind);
@@ -702,15 +764,22 @@
       var success = reply(200,content,kind === 'asset' ? 'application/javascript' : 'text/plain');
       success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
+      traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined);
       return success;
     } catch (error) {
       if (error && error.keleeStage === 'resource-conversion') {
+        var record = traceResource('resource-conversion',target,fetched,error);
         var conversion = reply(422,'Kelee-QX 资源转换失败\n' + redact(messageOf(error)) +
-          '\n未返回部分成功配置。请保留原配置并提供此行的完整原始规则。');
+          '\n插件：' + record.plugin + ' (' + record.filename + ')' +
+          '\n资源：' + record.finalSource + '\n后端版本：' + CONFIG.version +
+          '\n原始规则' + (record.truncated ? '（已截断，完整行请查看原始插件）' : '') + '：\n' + record.rule +
+          '\n\n诊断报告（与 QX 日志相同）：\n' + JSON.stringify(record,null,2) +
+          '\n未返回部分成功配置。请保留原配置，反馈时附上这份诊断报告。');
         conversion.headers['X-Kelee-QX-Stage'] = 'resource-conversion';
-        conversion.headers['X-Kelee-QX-Upstream-Status'] = '200';
+        conversion.headers['X-Kelee-QX-Upstream-Status'] = String(record.upstreamStatus || 0);
         return conversion;
       }
+      traceResource('transport',target,fetched,error);
       var failure = reply(502,'Kelee-QX 请求未完成（网络或重定向校验失败）：' + redact(messageOf(error)));
       failure.headers['X-Kelee-QX-Stage'] = 'transport';
       return failure;
