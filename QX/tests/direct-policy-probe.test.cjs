@@ -193,5 +193,5 @@ test('the updated existing subscription covers all DIRECT test paths and rejects
     assert.ok(rules.some(l=>new RegExp(l.split(' url ')[0]).test(u)),u);
   for(const u of [base+'/dashboard?extra=1',endpoint('control')+'&extra=1',base+'/cleanup?id=other'])
     assert.ok(!rules.some(l=>new RegExp(l.split(' url ')[0]).test(u)),u);
-  assert.ok(rules.every(l=>l.includes('/direct-policy-v2.js')));
+  assert.ok(rules.every(l=>/\/direct-policy-v[23]\.js$/.test(l)));
 });

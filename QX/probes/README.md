@@ -4,6 +4,12 @@
 
 ## DIRECT 原请求补测
 
+当前使用 v3，页面地址仍是下方 DIRECT 页面，报告开头应为 `kelee-qx-direct-policy-browser-v3`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试，不用于本次补测。
+
+v2 手机报告已收到：两轮 DIRECT 参考均 200，proxy 参考均 0，未建立比较基线；五个原请求都正常回显，但不能由此判断 DIRECT 是否生效。v3 校准时只读检查内置 proxy 的选中链；proxy 请求失败或响应无法识别时，最多补试一个明确的选中服务器标签，成功后固定该标签供本 run 前后比较，不轮询其他节点、不修改策略选择。每次参考请求设六秒等待上限，配置读取一点五秒；迟到结果不恢复清理后的记录。校准不可判别时立即结束并清理，不继续五个没有基线的请求。
+
+报告只返回策略状态是否取得、是否有具体叶子、有限的结果分类及状态码，不输出标签、原始异常或 IP。成功选中的服务器标签仅在本 run 专用 prefs 中短暂保存供第二轮固定参考使用，结束删除。若现有 control 与该参考不符，仍然无法判断，不会自动切换全局模式或替换原请求。
+
 已完成下面的 reject 测试时，只需在 QX 更新已有 `policy-probe.snippet` 资源，再用 Safari 打开[DIRECT 对照页面](https://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，点“开始测试”，等 `"finished": true` 后复制结果。新脚本使用独立文件地址，避开上一轮脚本缓存；无需修改生产分流或全局模式。
 
 测试前后分别用官方 FETCH 的 `opts.policy: direct/proxy` 建立出口参考，中间执行原生 control / policy-direct / control / opts-direct / control。FETCH 只建立参考，原请求不重发。比较只输出布尔值，原始 IP 不保存；运行期间每个 run 使用自己的专用 prefs 键，保存带随机盐的 SHA256、运行编号、两分钟有效期及清理用的 token，结束删除自己的键，不操作其他设置。超时清理后的迟到校准结果不会恢复参考记录。

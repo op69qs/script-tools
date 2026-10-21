@@ -54,6 +54,7 @@ test('strict configuration restores the original QUIC rule and whole-resource 42
 test('ready output and logs disclose configured omission without claiming equivalence',async()=>{
   const logs=[],context={module:{exports:{}},console:{log:value=>logs.push(value)}};
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname,'..','kelee-qx.js'),'utf8'),context);
+  context.module.exports.CONFIG.quicMode='global';
   const response=await context.module.exports.backendResponse({url:local},async()=>({
     statusCode:200,headers:{},body:'#!name=example\n[Rule]\n'+rule()
   }));
@@ -81,4 +82,28 @@ test('a resource-wide output limit cannot leave a retained rule marked as omitte
   const boundary=input.split('\n').slice(0,firstRetained+1).join('\n');
   const response=await api.backendResponse({url:local},async()=>({statusCode:200,headers:{},body:boundary}));
   assert.match(response.status,/422/);
+});
+test('default MitM mode does not require global QUIC and reports an exact listed host',async()=>{
+  const input='[Rule]\n'+rule()+'\n[MitM]\nhostname=example.com';
+  const details=[],prepared=api.prepareResourceContent(input,target,details);
+  const response=await api.backendResponse({url:local},async()=>({statusCode:200,headers:{},body:input}));
+  assert.equal(response.headers['X-Kelee-QX-QUIC-Requirement'],'mitm-auto-quic');
+  assert.equal(details[0].mitmCoverage,'exact-host-listed');
+  assert.ok(prepared.endsWith('[MitM]\nhostname=example.com'));
+  assert.ok(!prepared.includes('requires [general]'));
+});
+test('MitM mode exposes partial suffix coverage without adding TLS hostnames',()=>{
+  const input='[Rule]\n'+rule('DOMAIN-SUFFIX')+'\n[MitM]\nhostname=api.example.com, www.example.com';
+  const details=[],prepared=api.prepareResourceContent(input,target,details);
+  assert.equal(details[0].mitmCoverage,'partial');
+  assert.deepEqual(details[0].relatedMitmHostnames,['api.example.com','www.example.com']);
+  assert.ok(prepared.endsWith('hostname=api.example.com, www.example.com'));
+  assert.ok(!prepared.includes('hostname=*.example.com'));
+});
+test('an invalid QUIC mode restores rejection rather than silently relaxing rules',async()=>{
+  const previous=api.CONFIG.quicMode;api.CONFIG.quicMode='typo';
+  try {
+    const response=await api.backendResponse({url:local},async()=>({statusCode:200,headers:{},body:'[Rule]\n'+rule()}));
+    assert.match(response.status,/422/);
+  }finally{api.CONFIG.quicMode=previous;}
 });

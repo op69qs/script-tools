@@ -1,12 +1,14 @@
 # Kelee → Quantumult X 适配器
 
-`kelee-qx.js` v1.7.1。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
+`kelee-qx.js` v1.7.2。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
 
 ## 本次支持范围
 
-v1.7.1 按允许全局禁用 QUIC 的配置交付 RedPaper 和 PinDuoDuo。**先在 QX 主配置的 `[general]` 设置 `udp_drop_list = QUIC`**；已有 `udp_drop_list` 时在原列表中加入 `QUIC`，保留原端口和协议项，不要另建重复设置。该项作用于所有域名；重写订阅不能设置 `[general]`，后端也没有核验手机设置。
+v1.7.2 默认 `CONFIG.quicMode = 'mitm'`：依赖 QX 已有的 MitM 相关 QUIC 自动拦截，**不再要求全局禁用 QUIC**。保持 QX MitM 和相应资源启用，沿用原插件的 hostname，不为 QUIC 扩大 TCP 的解密范围。[官方说明](https://t.me/QuanXNews/302)及[旧版 Google QUIC 支持](https://t.me/QuanXNews/399)。
 
-脚本默认 `CONFIG.omitDomainQuicReject = true`，仅将两个叶子的 `AND(DOMAIN 或 DOMAIN-SUFFIX, PROTOCOL QUIC) → REJECT` 留为注释，由上述全局 QUIC 拦截承担；不生成整域 REJECT，也不扩大 TCP 的 MitM 主机列表。这是已允许的范围放宽，不标为匹配集合等价。设为 `false` 可恢复严格检查与 422。其他协议、策略、嵌套逻辑和额外参数继续检查，不能借此绕过 DIRECT 例外。
+脚本默认 `CONFIG.omitDomainQuicReject = true`，仅将两个叶子的 `AND(DOMAIN 或 DOMAIN-SUFFIX, PROTOCOL QUIC) → REJECT` 留为注释。PDD 的精确 api 主机已在原 MitM 列表；RedPaper、Spotify 的原域名后缀比现有 MitM 列表更大，默认仅依赖已列出主机的自动机制，其余范围按已允许的 QUIC 放宽处理。日志的 `mitmCoverage` 与 `relatedMitmHostnames` 是本插件主机文字覆盖信息，不是对手机启用状态、所有端口或完整行为等价的证明。
+
+`CONFIG.quicMode = 'global'` 保留全局方案，此时需在主配置 `[general]` 让 `udp_drop_list` 包含 `QUIC`（保留原端口和协议项）。默认 MitM 方案下不需要为了本适配器新增这项；若之前专为 v1.7.1 加入 QUIC，可仅移除该项，保留列表其余内容。重写订阅不能设置全局列表，后端也未核验设备配置。将 `omitDomainQuicReject` 设为 `false` 可恢复严格 422。其他协议、策略、嵌套逻辑和额外参数继续检查，不能借此绕过 DIRECT 例外。
 
 转换注释、日志的 `omittedQuic` / `quicRequirement` 以及响应头 `X-Kelee-QX-Omitted-QUIC` / `X-Kelee-QX-QUIC-Requirement` 会标明省略条数和安装前提。完整 TXT 与 `QX/kelee-qx.js` 内容一致；替换手机 `Scripts/kelee-qx.js` 后，再更新现有资源。
 
@@ -28,7 +30,7 @@ v1.7.0 加入两叶 `AND(URL-REGEX, USER-AGENT) → REJECT` 的通用编译，�
 
 ## 仍有的缺口
 
-- 域名与 `PROTOCOL, QUIC` 的交集：v1.7.1 默认按上述已允许的全局禁用 QUIC 方案处理；严格模式仍拒绝，未声称全局方案与原域名范围相等。
+- 域名与 `PROTOCOL, QUIC` 的交集：默认按上述现有 MitM 方案放宽，可选全局模式；严格模式仍拒绝，未声称三种行为等价。
 - `URL-REGEX` 与 `USER-AGENT` 的 DIRECT/PROXY 组合、嵌套混合条件及超出上述 UA 范围的规则仍未适配；`url-and-header` 不自行赋予原请求 DIRECT 策略。
 - `NOT`、其他谓词、额外标记、未验证策略：整体拒绝并报告缺口。
 - Spotify：跨主机 `url.replace` 尚无已验证的 QX 等价实现，插件继续整体返回 HTTP 422。手机 TF 953 测试中，只改 URL 和 URL＋Host 两种写法均返回 404；后者显示目标 URL 形态仍不代表连接已经迁移。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。带参数二进制脚本、超时及全 spotify.com 后缀的 QUIC 组合也未完成等价适配。

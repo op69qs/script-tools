@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.7.1 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.7.2 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,11 +22,12 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.7.1',
-    // Requires [general] udp_drop_list to include QUIC on the device.
-    // Omit ONLY two-leaf domain AND QUIC -> REJECT; the global scope is broader.
-    // The backend cannot verify that device setting. Set false for strict 422.
+    version: '1.7.2',
+    // Relax only two-leaf domain AND QUIC -> REJECT. MitM mode relies on
+    // existing hostname coverage only; it never adds TLS interception hosts.
+    // Use 'global' for udp_drop_list=QUIC. Set omission false for strict 422.
     omitDomainQuicReject: true,
+    quicMode: 'mitm',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -615,13 +616,16 @@
     // Loon gives some filter classes priority over HTTP rules regardless of line
     // order. Never move an HTTP reject across a possible DIRECT/PROXY exception.
     // This is deliberately conservative; unrelated rules can be narrowed later.
-    var filterSection = '', filterComment = false, routingConflict = false;
+    var filterSection = '', filterComment = false, routingConflict = false, mitmHostnames = [];
     String(content || '').split('\n').forEach(function (line) {
       var text = line.trim();
       if (filterComment) { if (text.indexOf('*/') !== -1) filterComment = false; return; }
       if (/^\/\*/.test(text)) { filterComment = text.indexOf('*/',2) === -1; return; }
       text = ruleAnnotation(line).body.trim();
       if (/^\[[^\]]+\]$/.test(text)) { filterSection = text.toLowerCase(); return; }
+      if (filterSection === '[mitm]' && /^hostname\s*=/i.test(text)) {
+        mitmHostnames = mitmHostnames.concat(text.slice(text.indexOf('=')+1).split(',').map(function(host){return host.trim().toLowerCase();}));
+      }
       if (filterSection !== '[rule]' || !text || /^(?:#|;|\/\/)/.test(text)) return;
       if (!/,\s*REJECT\s*$/i.test(text)) routingConflict = true;
     });
@@ -663,7 +667,7 @@
           return value.slice(1,-1);
         }
         function quicOmission(root) {
-          if (CONFIG.omitDomainQuicReject !== true || root[0].toUpperCase() !== 'AND' ||
+          if (CONFIG.omitDomainQuicReject !== true || !/^(?:mitm|global)$/.test(CONFIG.quicMode) || root[0].toUpperCase() !== 'AND' ||
               root[2].toUpperCase() !== 'REJECT') return null;
           var children = split(unwrap(root[1]));
           if (children.length !== 2) return null;
@@ -675,9 +679,24 @@
           if (domain.length > 128 || !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/i.test(domain)) return null;
           record.status = 'omitted-by-config';
           record.mechanism = 'configured-domain-quic-omission';
-          record.reason = '按 omitDomainQuicReject 配置省略域名 AND QUIC 拒绝，前提是主配置 udp_drop_list 包含 QUIC；后端未核验此设备设置，不声称匹配范围等价。';
+          record.quicMode = CONFIG.quicMode;
+          if (CONFIG.quicMode === 'mitm') {
+            domain = domain.toLowerCase();
+            record.relatedMitmHostnames = mitmHostnames.filter(function(host) {
+              return host === domain || host.slice(-(domain.length+1)) === '.'+domain;
+            });
+            record.mitmCoverage = a[0].toUpperCase() === 'DOMAIN' && mitmHostnames.indexOf(domain)!==-1
+              ? 'exact-host-listed' : a[0].toUpperCase() === 'DOMAIN-SUFFIX' && mitmHostnames.indexOf(domain)!==-1 &&
+                mitmHostnames.indexOf('*.'+domain)!==-1 ? 'suffix-patterns-listed' :
+                  record.relatedMitmHostnames.length ? 'partial' : 'not-listed';
+          }
+          record.reason = CONFIG.quicMode === 'global'
+            ? '按配置省略域名 AND QUIC 拒绝，前提是主配置 udp_drop_list 包含 QUIC；后端未核验此设备设置，不声称匹配范围等价。'
+            : '按配置放宽 QUIC，仅依赖现有 MitM hostname 的自动拦截；要求资源及 MitM 启用，未核验设备状态，不保证整个域名后缀均被拦截，不增加 MitM 主机。';
           return '# Kelee-QX: omitted domain AND QUIC REJECT by configuration (source line ' +
-            (index + 1) + '); requires [general] udp_drop_list containing QUIC. ' + annotation.prefix + text;
+            (index + 1) + '); ' + (CONFIG.quicMode === 'global'
+              ? 'requires [general] udp_drop_list containing QUIC. '
+              : 'MitM auto QUIC for existing hostnames only; coverage=' + record.mitmCoverage + '. ') + annotation.prefix + text;
         }
         function httpReject(root) {
           if (root[0].toUpperCase() !== 'AND' || root[2].toUpperCase() !== 'REJECT') return null;
@@ -967,9 +986,14 @@
       record.omittedQuic = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).length;
       record.pendingLogical = record.inputLogical - record.convertedLogical - record.omittedQuic;
       record.logicalState = record.pendingLogical ? 'rejected' : record.omittedQuic ? 'ready-with-quic-omission' : 'matching-set-converted';
-      if (record.omittedQuic) record.quicRequirement = 'udp_drop_list includes QUIC; device setting not verified';
+      if (record.omittedQuic) {
+        record.quicMode = CONFIG.quicMode;
+        record.quicRequirement = CONFIG.quicMode === 'global' ? 'udp_drop_list includes QUIC; device setting not verified'
+          : 'MitM and resource enabled; only existing hostname coverage; device setting not verified';
+      }
       record.omittedQuicExamples = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).slice(0,10).map(function (entry) {
-        return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
+        return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048),
+          mitmCoverage:entry.mitmCoverage,relatedMitmHostnames:entry.relatedMitmHostnames};
       });
       record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted' && entry.status !== 'omitted-by-config'; }).slice(0,10).map(function (entry) {
         return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
@@ -1126,7 +1150,7 @@
       var omittedQuic = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).length;
       if (omittedQuic) {
         success.headers['X-Kelee-QX-Omitted-QUIC'] = String(omittedQuic);
-        success.headers['X-Kelee-QX-QUIC-Requirement'] = 'general-udp_drop_list-QUIC';
+        success.headers['X-Kelee-QX-QUIC-Requirement'] = CONFIG.quicMode === 'global' ? 'general-udp_drop_list-QUIC' : 'mitm-auto-quic';
       }
       traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined,logicalDetails);
       return success;

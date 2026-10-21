@@ -4,6 +4,12 @@
 
 ## 官方 TF 新变化
 
+### v1.7.2：MitM 作为默认 QUIC 前提，DIRECT v3 修复代理参考
+
+官方已确认 MitM 相关 QUIC 自动阻断，因此全局列表不是所有资源的必需条件。本版默认 `quicMode: 'mitm'`，使用原 hostname 的自动机制，不扩展 TCP MitM。PDD 原精确 api 域名已列入；RedPaper、Spotify 后缀只被部分覆盖，仍按用户允许的 QUIC 放宽省略，明确不承诺原后缀所有主机及端口均已覆盖。`global` 模式保留 v1.7.1 的全局前提；严格开关仍恢复 422。
+
+用户 TF953 的 DIRECT v2 报告，两轮参考均为 direct=200、proxy=0，所有原请求 200 且标记回显，但 referenceAvailable=false。结论是代理参考未建立，不能否定原请求 DIRECT。v3 增加只读选中链检查、一次具体服务器回退、固定参考和有限安全诊断；校准失败提前结束。它不更改生产 HTTPDNS 的两条 DIRECT，也不将原请求改为 FETCH 重发。
+
 ### v1.7.1：用户允许全局禁用 QUIC 后的交付变化
 
 用户已明确允许把 QUIC 拦截范围扩大至所有域名。按此新边界，主配置 `[general]` 必须让 `udp_drop_list` 包含 `QUIC`；保留已有端口及其他协议项。它是 QX 的全局配置，不能由重写资源代为设置，后端没有核验设备配置。这个方案不声称与原域名范围相等。
