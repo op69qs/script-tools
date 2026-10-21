@@ -2,6 +2,18 @@
 
 用于核实当前 TF 对 $done({url}) 的行为，不是 Spotify 去广告规则。它只使用固定测试 URL，不使用重定向或重新发请求作补偿。主适配器和 remoteSnippet 不会安装或启用它。
 
+## 原请求策略测试
+
+用于判断 HTTPDNS 两条 DIRECT 例外是否有逐请求策略接口可以利用；不需要 Loon，也不需要再做 Spotify 的 URL 测试。
+
+1. QX → 重写 → 引用/资源 → 添加，地址栏**只粘贴网址**：`https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.snippet`。关闭“资源解析器”，保存并更新一次。
+2. 保持 QX VPN、MitM 和已信任证书开启，用 Safari 打开[测试页面](https://httpbin.org/anything/kelee-qx-policy-probe/dashboard)，点“开始测试”。
+3. 等结果出现 `"finished": true`，点“复制结果”并贴回对话。测试后可关闭这条测试资源。
+
+页面按顺序执行：原生 GET 对照、`$done({policy:"reject"})`、对照、`$done({opts:{policy:"reject"}})`、对照。实际请求带固定标记；响应仅返回标记是否被服务器回显、状态及版本，不返回原始正文或 IP。另有一项独立 `$task.fetch` 的 reject 校准，不能将它当作原请求接口生效。
+
+`reject-not-enforced-on-this-request` 表示请求脚本的标记到达了服务器，且拿到该固定端点的 200，所测 reject 没有阻止这次原请求。失败、超时、404 或缺少标记均不能单独证明策略生效；报告保持 `provesFullEquivalence: false`。测试不会修改任何生产规则、策略组或全局模式，也不将两条 DIRECT 例外改为重发请求。
+
 ## 手动测试
 
 在 QX 的重写资源列表点添加，**地址栏只粘贴下面这个网址**，不要带逗号或参数：

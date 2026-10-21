@@ -15,13 +15,27 @@
 
 另有 [TF 921 资源解析器 UA 重试协议](https://t.me/QuanXNews/388)：可返回 `{retry:{user_agent:"..."}}`，每资源最多一次。当前本机适配器已经自己使用所需 UA 下载 Kelee；该接口解决下载差异，不解决语法和策略差异。
 
-## 剩余六条逻辑
+## v1.7.0 URL/UA 通用编译
+
+本轮重新检查官方 TF 频道，最新可见条目仍为 [1.9.0（953）](https://t.me/QuanXNews/435)。已加入两叶 URL-REGEX AND USER-AGENT REJECT 的原生 `url-and-header reject-200` 编译，PDD 的两条规则属于此范围。没有按插件名称分支，也没有拆分 AND。相同资源存在任一非 REJECT 分流时不启用这种跨层转换，以保护类别优先级及 DIRECT/PROXY。
+
+UA 大小写依据来自[官方 Loon4Mac 0.4.0（991）发布包](https://github.com/Loon0x00/Loon4Mac/releases/tag/0.4.0%28991%29)内 `LoonDepend.framework` 的静态实现审查。核心 SHA256：`1e6899e8559a740c0b5bb8ff46fd684d8291dd7fbb732ed4a6e21029178a7776`。x86_64 切片的类型表索引 3 为 USER-AGENT；UA 不进入小写化分支；`Rule isMatch...` 的 UA 参数经 UTF8String 进入 `DCUtils isWildcardMatch:p:`（0x1d8ba），逐字节比较，无大小写折叠。AND 递归保留同一 UA 参数。入口排除空 UA，因此当前编译明确拒绝纯星号；为避免 UTF-8 字节与字符的差异，不支持 `?`。
+
+上述为 Mac 991 的一手实现证据，支持当前保留字面大小写的实现选择；没有声称在 iOS 原引擎实测或两平台二进制完全相同。QX 输出限定完整 User-Agent 字段，UA 字面字符转为十六进制正则字面量，避免触发 KOP 的格式猜测。固定 UA 模式、URL 锚点、捕获组及同时满足条件由独立测试核对，真实 KOP 在模拟 TF 953 环境中保留输出。
+
+维护中转换器也重新核查了具体文件：[Sub-Store 的 QX 规则导出](https://github.com/sub-store-org/Sub-Store/blob/master/backend/src/core/rule-utils/producers.js)仍将 URL-REGEX、PROTOCOL 等列为未支持，文件最近提交为 2024-03-14（仓库本身仍在更新）；KOP 的最新文件仍为 2026-10-12 的 f0177f5。未找到可直接套用的原请求 DIRECT 或域名/QUIC 等价转换。`NSNanoCat/util` 的 `done.mjs` 虽先设置 opts.policy，随后 pick 的字段列表排除了 opts，不能把 README 的策略映射表当作 QX 原生接口证据。
+
+为继续核实原请求策略接口，新增[单页自动策略测试](probes/README.md#原请求策略测试)，分别测试 policy、opts.policy 并穿插对照。失败不当作生效证据，原请求不经 fetch 重发。该测试独立启用，不加入 remoteSnippet。
+
+该测试只验证这两种携带 reject 的写法，不由结果推断所有逐请求策略接口或 DIRECT 的支持情况。校准 Promise 被拒绝也不自动证明 reject 策略合法且已经生效。
+
+## 原六条逻辑（其中两条已编译）
 
 | 来源 | 条数与原条件 | 候选方案 | 仍缺的等价性证据 |
 | --- | --- | --- | --- |
 | RedPaper | 1：xiaohongshu.com 后缀 AND QUIC → REJECT | 自动 MitM QUIC enforcement | 原 MitM 只有 ci、edith、rec、so、www 等主机，未覆盖整个后缀。扩大 MitM 会改变 TCP 解密范围，不能作为等价转换。 |
 | PinDuoDuo | 1：api.pinduoduo.com AND QUIC → REJECT | 该主机已在原 MitM 列表，自动 enforcement 可能覆盖 | 仍依赖 MitM 开关、协议识别、端口与连接行为，尚未证明与原分流规则的策略和优先级相同，因此未删此规则。 |
-| PinDuoDuo | 2：URL-REGEX AND USER-AGENT → REJECT | 原生 `url-and-header` 可以表达匹配交集 | 从分流层移到重写层会涉及拒绝动作、优先级和与其他规则的交互。只证明两个正则都匹配不足以证明完整等价。 |
+| PinDuoDuo | 2：URL-REGEX AND USER-AGENT → REJECT | v1.7.0 编译为原生 `url-and-header reject-200`，两条件保持交集 | UA 实现及优先级保护见上节；整份 PDD 仍被 QUIC 规则阻断，不能把两条编译成功说成插件已恢复。 |
 | Block_HTTPDNS | 2：119.29.29.90 / 119.28.28.90 的 /d? 路径 AND 特定 USER-AGENT → DIRECT | URL/头交集、重写排除、脚本指定策略 | 尚无已验证的原连接 DIRECT 与后续匹配行为；不使用重发请求或合成响应模拟 DIRECT。 |
 
 不能将 AND 子项分别输出。全局关闭 QUIC、整域拒绝、整 IP 直连、替换为另一个维护者的规则集都会改变匹配范围。
@@ -65,7 +79,7 @@ v1.6.1 后端在任一规则无法完整转换时主动返回 422，截图中的
 | 资源 | 首个已知阻断 | 后续已知缺口 |
 | --- | --- | --- |
 | RedPaper_remove_ads | 第 14 行，xiaohongshu.com 后缀与 QUIC 的交集 | 无已验证的全范围等价方案。 |
-| PinDuoDuo_remove_ads | 第 14 行，URL 与 UA 的 REJECT 组合 | 另一条 URL/UA 组合及精确域名/QUIC 组合，合计 3 条。 |
+| PinDuoDuo_remove_ads | v1.7.0 首个阻断变为第 16 行，精确域名/QUIC 组合 | 两条 URL/UA REJECT 已编译，仍有 1 条逻辑待适配。 |
 | Spotify_remove_ads | 第 23 行，跨主机 url.replace | 二进制参数、超时及第 18 行的全后缀 QUIC 逻辑。 |
 | Block_HTTPDNS | 第 22 行，URL 与 UA 的 DIRECT 例外 | 共 2 条 DIRECT 例外，不能删除后继续交付宽泛 REJECT。 |
 

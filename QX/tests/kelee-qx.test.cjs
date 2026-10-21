@@ -101,7 +101,7 @@ test('expansion stays at the original position and keeps the surrounding policy 
 for(const rule of [
   'AND, ((DOMAIN-SUFFIX, example.com), (PROTOCOL, QUIC)), REJECT',
   'AND, ((URL-REGEX, ^http:\\/\\/dns\\.example\\/d\\?), (USER-AGENT, App*)), DIRECT',
-  'AND, ((URL-REGEX, "^http:\\/\\/dns\\.example\\/d\\?"), (USER-AGENT, "*App*")), REJECT',
+  'AND, ((URL-REGEX, "^http:\\/\\/dns\\.example\\/d\\?"), (USER-AGENT, "*App*")), PROXY',
   'NOT, ((DOMAIN, example.com)), REJECT',
   'AND, ((DOMAIN, *.example.com), (DOMAIN-KEYWORD, ad)), REJECT',
   'AND, ((DOMAIN-KEYWORD, "a?b"), (DOMAIN-SUFFIX, example.com)), REJECT',

@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.6.1 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.7.0 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -8,7 +8,7 @@
  * 1. Rewrite the hub's standard Loon installation links.
  * 2. Serve a local installation fallback/status page (script-echo-response).
  * 3. Fetch allow-listed resources and Kelee JavaScript dependencies (http_backend).
- * 4. Normalize Loon scripts, conditional rewrites and positive domain logic before the resource parser sees them.
+ * 4. Normalize Loon scripts, conditional rewrites and supported domain/HTTP logic before the resource parser sees them.
  *
  * This is an installer/download adapter, NOT a Loon engine or LPX decryptor.
  * The global resource parser still has to convert the fetched configuration.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.6.1',
+    version: '1.7.0',
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -608,6 +608,19 @@
   }
   function normalizeLogicalRules(content, details) {
     var section = '', inComment = false, totalWork = 0, totalRules = 0, totalChars = 0, exhausted = false;
+    // Loon gives some filter classes priority over HTTP rules regardless of line
+    // order. Never move an HTTP reject across a possible DIRECT/PROXY exception.
+    // This is deliberately conservative; unrelated rules can be narrowed later.
+    var filterSection = '', filterComment = false, routingConflict = false;
+    String(content || '').split('\n').forEach(function (line) {
+      var text = line.trim();
+      if (filterComment) { if (text.indexOf('*/') !== -1) filterComment = false; return; }
+      if (/^\/\*/.test(text)) { filterComment = text.indexOf('*/',2) === -1; return; }
+      text = ruleAnnotation(line).body.trim();
+      if (/^\[[^\]]+\]$/.test(text)) { filterSection = text.toLowerCase(); return; }
+      if (filterSection !== '[rule]' || !text || /^(?:#|;|\/\/)/.test(text)) return;
+      if (!/,\s*REJECT\s*$/i.test(text)) routingConflict = true;
+    });
     return String(content || '').split('\n').map(function (line, index) {
       var text = line.trim();
       if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
@@ -644,6 +657,46 @@
         function unwrap(value) {
           if (value.charAt(0) !== '(' || value.charAt(value.length - 1) !== ')') stop('逻辑子规则必须用括号包围。');
           return value.slice(1,-1);
+        }
+        function httpReject(root) {
+          if (root[0].toUpperCase() !== 'AND' || root[2].toUpperCase() !== 'REJECT') return null;
+          var children = split(unwrap(root[1]));
+          if (children.length !== 2) return null;
+          var a = split(unwrap(children[0])), b = split(unwrap(children[1]));
+          if (a[0].toUpperCase() === 'USER-AGENT') { var swap = a; a = b; b = swap; }
+          if (a[0].toUpperCase() !== 'URL-REGEX' || b[0].toUpperCase() !== 'USER-AGENT') return null;
+          if (a.length !== 2 || b.length !== 2) stop('HTTP 逻辑子规则含额外参数。');
+          if (routingConflict) stop('资源中还有非 REJECT 分流；不能让 HTTP 重写越过可能优先匹配的策略。');
+          function literal(value) {
+            return value.replace(/^(["'])([\s\S]*)\1$/,'$2');
+          }
+          var pattern = literal(a[1]), ua = literal(b[1]);
+          if (!pattern || pattern.length > 4096 || /[\s"']/.test(pattern))
+            stop('HTTP 组合的 URL 正则为空、过长或包含未适配的空白/引号。');
+          // These substrings trigger unrelated KOP heuristics even in native
+          // rules. Keep the original rule instead of letting KOP reinterpret it.
+          if (/URL-REGEX|http-r|data=/.test(pattern) || /pattern/.test(pattern) && /type/.test(pattern))
+            stop('URL 正则含会被资源解析器误判的语法，尚不能可靠透传。');
+          if (!ua || ua.length > 512 || !/[^*\s]/.test(ua) ||
+              /[^\x20-\x7e]|[%\\"'?]/.test(ua) || /^\s|\s$/.test(ua))
+            stop('UA 组合仅适配非空 ASCII 字面量及 *，尚不转换纯星号、?、编码或复杂转义。');
+          var valuePattern = '';
+          for (var i = 0; i < ua.length; i++) {
+            var c = ua.charAt(i);
+            // Hex literals also prevent a UA containing "URL-REGEX" or
+            // "http-request" from triggering KOP's format-detection heuristics.
+            valuePattern += c === '*' ? '[^\\r\\n]*' :
+              '\\x' + ('0' + ua.charCodeAt(i).toString(16)).slice(-2);
+          }
+          // Official Loon4Mac 991 core: USER-AGENT reaches the byte-comparing
+          // DCUtils wildcard matcher without case folding (see research note).
+          // Restrict '?' and empty/pure-star cases; '*' with ASCII literals is
+          // representable without assuming Unicode byte/character equivalence.
+          var headerPattern = '(?:^|\\r?\\n)[Uu][Ss][Ee][Rr]-[Aa][Gg][Ee][Nn][Tt]:[\\x20\\t]*' +
+            valuePattern + '[\\x20\\t]*(?=\\r?\\n|$)';
+          record.mechanism = 'url-and-header';
+          // Match KOP's existing URL-REGEX REJECT -> reject-200 convention.
+          return annotation.prefix + protectParserPattern(pattern) + ' ' + headerPattern + ' url-and-header reject-200';
         }
         function unique(values) {
           var seen = Object.create(null), out = [];
@@ -708,7 +761,7 @@
           if (!/^DOMAIN(?:-SUFFIX|-KEYWORD)?$/.test(kind)) {
             if (kind === 'PROTOCOL') stop('协议与域名的交集没有已验证的 QX 分流语法；不能用全局关闭 QUIC 替代。');
             if (kind === 'URL-REGEX' || kind === 'USER-AGENT')
-              stop('URL/User-Agent 分流组合不能仅凭 url-and-header 保证策略及优先级等价，保留原规则。');
+              stop('当前仅适配无其他路由策略的两叶 URL-REGEX AND USER-AGENT REJECT；DIRECT、PROXY 及其他组合保留原规则。');
             stop('逻辑子规则类型尚未适配：' + kind.slice(0,40));
           }
           if (fields.length !== 2) stop('域名子规则含额外参数。');
@@ -724,13 +777,18 @@
         var root = split(text);
         if (root.length !== 3 || !/^(?:DIRECT|REJECT|PROXY)$/i.test(root[2]))
           stop('域名逻辑仅验证了 DIRECT/REJECT/PROXY 策略，且不接受额外参数。');
-        var globs = compile(root[0] + ',' + root[1],0);
-        var block = globs.length ? globs.map(function (glob) { return annotation.prefix + 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
-          '# Kelee-QX: domain logic has an empty intersection.';
-        if (totalRules + globs.length > 512 || totalChars + block.length > 131072)
+        var block = httpReject(root), outputCount;
+        if (block !== null) outputCount = 1;
+        else {
+          var globs = compile(root[0] + ',' + root[1],0);
+          block = globs.length ? globs.map(function (glob) { return annotation.prefix + 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
+            '# Kelee-QX: domain logic has an empty intersection.';
+          outputCount = globs.length;
+        }
+        if (totalRules + outputCount > 512 || totalChars + block.length > 131072)
           resourceStop('整份资源的域名逻辑输出预算已耗尽，保留剩余原文。');
-        totalRules += globs.length; totalChars += block.length;
-        record.status = 'converted'; record.outputRules = globs.length;
+        totalRules += outputCount; totalChars += block.length;
+        record.status = 'converted'; record.outputRules = outputCount;
         if (Array.isArray(details)) details.push(record);
         return block;
       } catch (error) {
@@ -813,7 +871,7 @@
       '<p><a href="' + escapeHTML(qx) + '">将 BlockAdvertisers 添加到 QX</a></p>' +
       '<p>诊断比较三组请求：A 旧 UA；B 公布的 UA（仅改 UA）；C 公布的 UA 加 Accept: */*。普通下载只用当前配置，不自动轮换 UA 或重试 403。</p>' +
       '<p>支持旧式 Loon 脚本及 URL 正则条件下的 script、reject、JSON jq/delete 和 response.json.replace。批量删除保持执行顺序，允许范围内的 Kelee JavaScript 依赖走本机后端；未支持的条件动作返回带插件名称、资源 URL、行号和原始规则的转换错误。JSON 规则仍需全局资源解析器。</p>' +
-      '<p>纯 DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD 的 AND/OR 可转为匹配集合相等的 host-wildcard，保留原位置及 DIRECT/REJECT/PROXY 策略，支持 TF 的规则备注前缀。跨客户端优先级仍需实机核验。任一逻辑无法转换时整份资源返回 422，防止解析器跳过 DIRECT 例外后改变策略。未适配的旧式脚本执行选项同样拒绝，日志附原始行号。</p>' +
+      '<p>纯域名 AND/OR 可转为 host-wildcard，保留原位置及 DIRECT/REJECT/PROXY 策略。两叶 URL-REGEX AND USER-AGENT REJECT 可转为 url-and-header，UA 限非空 ASCII 字面值和星号；插件内存在其他路由策略时不做该跨层转换。支持 TF 规则备注。任一逻辑无法转换时整份资源仍返回 422，日志附原始行号。</p>' +
       '<p>仍为 403 时，查看诊断页的响应摘要和可复制报告；不需要重复添加订阅。成功获取文本后仍需验证解析器兼容性。</p>');
   }
   /** Local report only. Never export cookies, Authorization, full plugin bodies or all headers. */

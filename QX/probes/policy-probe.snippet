@@ -1,0 +1,5 @@
+# Standalone TF diagnostic. Add as a rewrite resource with its parser OFF.
+hostname = httpbin.org
+^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/(?:dashboard|calibration)$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
+^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/request\?mode=(?:control|policy|opts-policy)&id=qx953-p1-[0-9]{8,20}$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
+^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/request\?mode=(?:control|policy|opts-policy)&id=qx953-p1-[0-9]{8,20}$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
