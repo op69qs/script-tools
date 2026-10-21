@@ -4,7 +4,21 @@
 
 ## DIRECT 原请求补测
 
-当前使用 v5，页面地址不变，报告开头应为 `kelee-qx-direct-policy-browser-v5`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试，不用于本次补测。
+### 当前先做：一键导入临时代理对照
+
+手机已确认后端 1.8.0，现有模式接口返回 all_proxy。用户报告 httpbingo.org 普通 HTTP 请求在全局模式走代理，但手工临时 host 规则在 filter 模式仍为 DIRECT。现在先核实受控导入的分流是否生效，不运行完整 v5，也不据此发布 v6 或放行 HTTPDNS。
+
+1. 点击[添加临时测试分流](https://quantumult.app/x/open-app/add-resource?remote-resource=%7B%22filter_remote%22%3A%5B%22https%3A%2F%2Fraw.githubusercontent.com%2Fop69qs%2Fscript-tools%2Fmain%2FQX%2Fprobes%2Fhttpbingo-proxy.filter%2C%20tag%3DKelee-QX%20DIRECT%20%E4%B8%B4%E6%97%B6%E6%B5%8B%E8%AF%95%2C%20force-policy%3Dproxy%2C%20inserted-resource%3Dtrue%2C%20opt-parser%3Dfalse%2C%20enabled%3Dtrue%22%5D%7D)，在 QX 确认添加名称为“Kelee-QX DIRECT 临时测试”的资源。它属于**分流引用**，只有 `host, httpbingo.org, proxy`，不需要资源解析器。
+2. 保持分流模式，用 Safari 打开[普通 HTTP 对照](http://httpbingo.org/get?kelee_qx_route_check=20261020import)，查看这次新记录是否经过代理。无需复制网页正文。
+3. 测试结束删除该独立临时订阅。内置 proxy 使用用户现有选中项；订阅不更改其选择。
+
+一键入口使用官方 add-resource/filter_remote，仅追加这一条资源。备用 scheme：[打开 QX 添加页](quantumult-x:///add-resource?remote-resource=%7B%22filter_remote%22%3A%5B%22https%3A%2F%2Fraw.githubusercontent.com%2Fop69qs%2Fscript-tools%2Fmain%2FQX%2Fprobes%2Fhttpbingo-proxy.filter%2C%20tag%3DKelee-QX%20DIRECT%20%E4%B8%B4%E6%97%B6%E6%B5%8B%E8%AF%95%2C%20force-policy%3Dproxy%2C%20inserted-resource%3Dtrue%2C%20opt-parser%3Dfalse%2C%20enabled%3Dtrue%22%5D%7D)；原始文件为 [httpbingo-proxy.filter](httpbingo-proxy.filter)。如需手工导入原始文件，应添加到分流引用，不能添加到重写引用。inserted-resource=true 不在此被解释为覆盖所有其他插入资源的绝对优先级。
+
+手动调用 calibration 读取模式后，使用相同 runId 的 `/cleanup?id=...` 清理本次专用记录；两分钟有效期只表示记录失效，不等于已经从 prefs 删除。完整 dashboard 正常结束时会执行自己的清理。
+
+### v5 实现与历史操作
+
+现有脚本仍为 v5；当前先执行上面的临时分流对照，以下保留实现与历史操作说明。v5 报告开头为 `kelee-qx-direct-policy-browser-v5`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试。
 
 已收到 HTTP v5 手机结果：control-0 正常回显，但与 DIRECT 参考相同；用户随后在该条活动中确认最终策略为 DIRECT。两种被测 DIRECT 参数尚未执行，不能据此判断它们有效或无效。先查看同一条 `/request?mode=control`、编号末尾 `-0` 记录的**命中规则及最终策略链**，不要查看本地生成的 dashboard 或本来就指定 DIRECT 的 `direct-probe-reference`。规则未生效前不重复整套测试。
 

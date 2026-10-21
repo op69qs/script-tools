@@ -4,6 +4,12 @@
 
 ## 继续处理完整 Spotify / HTTPDNS
 
+手机已确认后端版本 1.8.0；现有 v5 模式读取返回 `runningMode: all_proxy`、DIRECT FETCH 200。该模式下 calibration 不建立参考，所以 `directReferenceAvailable: false` 不表示 DIRECT 失败，也没有执行两个原请求策略 payload。用户报告普通 HTTP httpbingo.org 在全局模式经过代理，手填临时 host 后恢复 filter 则为 DIRECT；原因尚未确定，不再只归因于 httpbin，也不假定手工规则实际已经装载。
+
+新增独立测试分流文件及官方 `add-resource`/`filter_remote` 一键入口，仅追加 `host, httpbingo.org, proxy`，内置 proxy 选择不变，测试结束删除此订阅。`force-policy=proxy` 固定该资源策略，`opt-parser=false` 避免解析器变量；`inserted-resource=true` 不承诺相对所有其他插入资源的绝对优先级。仍须在 filter 模式下确认普通 HTTP 新请求实际经过代理；确认前不发布 v6、不改 HTTPDNS 的原始 IP/URL/UA 策略。
+
+重新联网验证当前 11 份上游与真实 KOP：9 份转换通过、Spotify 和 HTTPDNS 仍 422，16 份依赖下载及语法通过。RedPaper 21 条、PinDuoDuo 29 条重写及其余规则按原有授权处理；截图中的旧 422 不能单独定位手机当前资源更新的失败原因。安装订阅仍与 v1.3.0 一致，adapter.js 地址没有版本号。
+
 HTTP v5 手机结果只执行了 control-0，正常回显与 DIRECT 参考相同，随后用户确认该条原生活动最终策略为 DIRECT。因此停止继续解释出口对比；两个被测 DIRECT 参数均未执行。下一步只读取现有记录的命中规则及最终策略链，区分临时 host 规则未命中、所选组最终为 DIRECT 或其他原因，不重复相同条件。审查同时发现 v5 请求 hook 丢弃原 Host/UA 等字段；已修为复制原头部，只更新 marker、Cache-Control、Connection，并补 HTTP/HTTPS、三种模式、字段大小写及不可变对象回归。已知缺陷的修复不等于已经证实了路由失败原因，也未据此放行 HTTPDNS。
 
 补查今天仍有更新的 [Script Hub Beta](https://github.com/Script-Hub-Org/Script-Hub/blob/d9d7473831c057ac0c28ba15c01a0a351099d95d/Rewrite-Parser.beta.js)：目标白名单为 Surge、Shadowrocket、Loon、Stash，`normalizeLoonV2RewriteToSurge` 的 `url.replace` 映射和 `normalizeLoonV2Timeout` 的 timeout 保留针对这些宿主，不提供 QX 目标。不能把它支持 Loon v2 的介绍当作 QX 跨主机或 timeout 方案。[项目说明](https://github.com/Script-Hub-Org/Script-Hub#loon-script-v2-跨端转换beta)同样列出了这些目标。

@@ -1,0 +1,3 @@
+# Temporary QX filter for the native DIRECT control only.
+# Add under filter_remote; remove this subscription after testing.
+host, httpbingo.org, proxy
