@@ -62,9 +62,9 @@ test('string, documented error objects and Error.message all retain only a finit
     assert.ok(!JSON.stringify(report).match(/PRIVATE|192\.0\.2/));
   }
 });
-test('the current subscription uses v4 at the same diagnostic page URL',()=>{
+test('the current subscription keeps a fresh script at the same diagnostic page URL',()=>{
   const body=fs.readFileSync(path.join(folder,'policy-probe.snippet'),'utf8');
-  assert.equal(body.split('\n').filter(line=>line.includes(' url ') && line.includes('/direct-policy-v4.js')).length,3);
+  assert.equal(body.split(/\r?\n/).filter(line=>line.includes(' url ') && /\/direct-policy-v[45]\.js$/.test(line.trim())).length,3);
 });
 test('a default reference is not called proxy, and browser conclusions still require stable controls',async()=>{
   const values=[];

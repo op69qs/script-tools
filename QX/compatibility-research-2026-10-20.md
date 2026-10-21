@@ -2,6 +2,14 @@
 
 核查日期：2026-10-20；以下日期按 America/Los_Angeles。用户使用 TestFlight，因此本轮以公开可核实的 **TF 1.9.0（953）** 为基准。版本更新、规则解析成功、手机运行和跨客户端行为等价分别验证，不相互替代。
 
+## 继续处理完整 Spotify / HTTPDNS
+
+用户确认先前 httpbin.org 原生连接走 DIRECT；临时改成 host 代理后，v4 仍只有 FETCH 校准、未运行任何原生请求。v5 改为仅取明确的 DIRECT FETCH 前后参考，首个浏览器原生 control 自己建立另一参考，避免再用失败的代理 FETCH 作为门槛。三条 controls、被测请求及 verify 必须使用同一个随机原生参考编号；任一出口、编号或 DIRECT 参考变化均不作正结论。
+
+HTTPDNS 两条原规则是明文 HTTP，故 v5 同时提供协议隔离的 HTTP/HTTPS 页面并优先测 HTTP。固定服务的明文 GET 已在桌面确认返回 200、原 HTTP URL 回显及 origin 字段；这仅确认端点可用，不能代替手机路由观察。HTTP 被自动升级、重定向或回显协议不符均不算 HTTP 成功。新版仍未放行两条生产 DIRECT。
+
+对 [Loon4Mac 991 官方包](https://github.com/Loon0x00/Loon4Mac/releases/tag/0.4.0%28991%29)进一步追踪 timeout：x86_64 的 `LNJSContext evaluateResponseScript...`（0xf392e）读取脚本 timeout 并写入上下文；`startEvaluateScript`（0xf4a1b）再调用 `startEvaluateScriptTimeout:`（0xf748c）。后者在原生 delegateQueue 创建计时器，回调进入 `evaluateScriptTimeout`（0xf75dc）、`finishEvaluateScript:`（0xf5cf8）和完成 block，后续路径含 releaseJSContext、stopLoading 等清理。此为 Mac 991 静态证据，不能冒充 iOS 998 实测，也未证明同步 JS 被强制中断。它说明配置 timeout 涉及原生完成和清理语义，不能仅因 QX 提供 `setTimeout` 就认定二者等价；未采用 JS 软计时器放行 Spotify。
+
 ## v1.8.0：响应二进制与布尔参数桥接
 
 TF 953 手机报告 `kelee-qx-response-runtime-v1`：三个 bindingWritable、lexicalBindingsUpdated、binaryInputAvailable、statusMapped 以及 globalResponseExposed/globalDoneExposed 均为 true，结论为 `response-runtime-capabilities-observed`。它确认本机宿主能力，不宣称任意 Loon API 或完整 Spotify 等价。

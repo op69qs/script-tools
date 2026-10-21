@@ -4,7 +4,19 @@
 
 ## DIRECT 原请求补测
 
-当前使用 v4，页面地址仍是下方 DIRECT 页面，报告开头应为 `kelee-qx-direct-policy-browser-v4`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试，不用于本次补测。
+当前使用 v5，页面地址不变，报告开头应为 `kelee-qx-direct-policy-browser-v5`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试，不用于本次补测。
+
+1. 在 QX 添加最前面的临时本地分流：类型 host／主机名、内容 `httpbin.org`、策略选已确认可用的代理节点或组。这只建立测试对照，不修改 HTTPDNS 生产规则。
+2. 更新现有 `policy-probe.snippet` 测试资源，资源解析器保持关闭；Safari 打开[HTTP DIRECT 页面](http://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，点开始。HTTPDNS 原规则是明文 HTTP，因此本次优先测 HTTP。
+3. 等 `finished: true` 后复制完整 JSON。测试完成删除临时 `httpbin.org` 分流。
+
+v5 不再尝试代理 FETCH。它只用明确指定 DIRECT 的 FETCH 建立前后参考，然后**先执行浏览器 control-0**。通过状态 200、固定 URL、runId 与 marker 校验后，首个原生响应建立自己的出口参考；若与 DIRECT 参考相同，在这条原生请求之后停止，报告 `native-reference-not-distinct`，不把“同出口”解释成已经直连。
+
+只有首个原生出口与 DIRECT 不同、三条 control 均匹配同一个原生参考、前后 DIRECT 参考稳定且运行模式为 filter，才分别解释 policy-direct 与 opts-direct 的结果。原生参考使用独立随机编号贯穿五个响应及最终核验，防止基线中途替换却被误认为稳定。被测请求匹配 DIRECT 时仅报告本次观察到出口效果，仍非任意请求的完整等价证明。报告不包含 IP、出口指纹、盐或内部 token；正常结束删除本 run 的专用记录，有效期两分钟，迟到结果不恢复清理后的记录。
+
+报告的 `transport` 必须与实际 HTTP/HTTPS 一致，参考 FETCH、五个浏览器请求和核验使用同一协议，两种协议的存储完全分开。若 Safari 自动把 HTTP 页面升级为 HTTPS，页面与报告会明确显示 HTTPS，不计为 HTTPDNS 的证据；30x 或回显 URL 改变同样不计成功。需要单独比较 HTTPS 时，可打开[HTTPS 页面](https://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，不能用其阴性结果否定明文 HTTP。
+
+### v2–v4 历史校准
 
 已收到 TF 953 的 v4 手机结果：direct 与默认路由参考均 200，但出口相同，referencesDistinct=false；显式 proxy 及其叶子仍失败。页面在校准后停止，未执行五个原请求，所以仍不能判断 DIRECT。重跑相同条件不会增加证据，本轮不要求重复测试。
 
@@ -14,7 +26,7 @@ v2 手机报告已收到：两轮 DIRECT 参考均 200，proxy 参考均 0，未
 
 报告只返回策略状态是否取得、是否有具体叶子、有限的结果分类及状态码，不输出标签、原始异常或 IP。成功选中的服务器标签仅在本 run 专用 prefs 中短暂保存供第二轮固定参考使用，结束删除。若现有 control 与该参考不符，仍然无法判断，不会自动切换全局模式或替换原请求。
 
-已完成下面的 reject 测试时，只需在 QX 更新已有 `policy-probe.snippet` 资源，再用 Safari 打开[DIRECT 对照页面](https://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，点“开始测试”，等 `"finished": true` 后复制结果。新脚本使用独立文件地址，避开上一轮脚本缓存；无需修改生产分流或全局模式。
+v4 使用的也是同一个 DIRECT 对照页面。v5 沿用资源与页面地址，使用独立脚本文件，避免旧脚本缓存。
 
 测试前后分别用官方 FETCH 的 `opts.policy: direct/proxy` 建立出口参考，中间执行原生 control / policy-direct / control / opts-direct / control。FETCH 只建立参考，原请求不重发。比较只输出布尔值，原始 IP 不保存；运行期间每个 run 使用自己的专用 prefs 键，保存带随机盐的 SHA256、运行编号、两分钟有效期及清理用的 token，结束删除自己的键，不操作其他设置。超时清理后的迟到校准结果不会恢复参考记录。
 

@@ -96,7 +96,7 @@ test('late v3 calibration cannot recreate references after cleanup',async()=>{
 });
 test('current subscription uses a fresh script without requiring a new resource URL',()=>{
   const snippet=fs.readFileSync(path.join(folder,'policy-probe.snippet'),'utf8');
-  assert.equal(snippet.split('\n').filter(line=>line.includes(' url ') && /\/direct-policy-v[34]\.js$/.test(line)).length,3);
+  assert.equal(snippet.split(/\r?\n/).filter(line=>line.includes(' url ') && /\/direct-policy-v[345]\.js$/.test(line.trim())).length,3);
   assert.ok(!snippet.includes('/direct-policy-v2.js'));
 });
 test('a slow failed proxy gets a bounded selected-server fallback before the browser deadline',async()=>{
