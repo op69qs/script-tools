@@ -7,3 +7,5 @@ hostname = httpbin.org
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-direct-probe/(?:dashboard|(?:calibration|verify|cleanup)\?id=qx953-d2-[0-9]{13}-[0-9]{8})$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v4.js
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d2-[0-9]{13}-[0-9]{8}-[0-4]$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v4.js
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d2-[0-9]{13}-[0-9]{8}-[0-4]$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v4.js
+# Response bridge host capability check. This fixed GET is never replayed.
+^https://httpbin\.org(?::443)?/anything/kelee-qx-response-runtime-probe$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/response-runtime-v1.js

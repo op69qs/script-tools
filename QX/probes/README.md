@@ -20,6 +20,14 @@ v2 手机报告已收到：两轮 DIRECT 参考均 200，proxy 参考均 0，未
 
 这一步直接验证 DIRECT 值，避免把下述 reject 写法没有执行的结果推广为所有策略值的结论。
 
+## 响应脚本运行环境检查
+
+用于确认带类型参数、二进制响应桥接所需的宿主能力。更新同一份 `policy-probe.snippet` 后，用 Safari 打开[响应环境检查](https://httpbin.org/anything/kelee-qx-response-runtime-probe)，页面会直接显示 `kelee-qx-response-runtime-v1` JSON，无须点按钮。
+
+脚本仅作用于这个固定 GET 的响应；检查 `$response`、`$done`、`$argument` 的全局属性与脚本标识符能否同步替换，以及原生二进制正文是否可取得。随后恢复原属性描述符和存在状态，使用原回调输出布尔结果，不返回正文、头部或 IP，不修改策略、不重放请求、不写持久存储。词法绑定与全局对象属性分离、只读属性等负面环境也会尽力返回诊断。
+
+`response-runtime-capabilities-observed` 只确认这些宿主能力，不代表 Spotify 整份规则已等价适配；跨主机 URL 改写与超时仍须分别解决。运行环境未确认前，不自动发布启用响应桥接的主适配器。
+
 ## 原请求策略测试
 
 用于判断 HTTPDNS 两条 DIRECT 例外是否有逐请求策略接口可以利用；不需要 Loon，也不需要再做 Spotify 的 URL 测试。
