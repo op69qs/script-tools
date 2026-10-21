@@ -99,7 +99,7 @@ test('expansion stays at the original position and keeps the surrounding policy 
   assert.ok(lines.findLastIndex(line=>/^host-wildcard,/.test(line)) < lines.indexOf('DOMAIN-SUFFIX, example.com, DIRECT'));
 });
 for(const rule of [
-  'AND, ((DOMAIN-SUFFIX, example.com), (PROTOCOL, QUIC)), REJECT',
+  'AND, ((DOMAIN-SUFFIX, example.com), (PROTOCOL, UDP)), REJECT',
   'AND, ((URL-REGEX, ^http:\\/\\/dns\\.example\\/d\\?), (USER-AGENT, App*)), DIRECT',
   'AND, ((URL-REGEX, "^http:\\/\\/dns\\.example\\/d\\?"), (USER-AGENT, "*App*")), PROXY',
   'NOT, ((DOMAIN, example.com)), REJECT',
@@ -154,6 +154,7 @@ test('backend rejects unconverted logical rules and logs their original source l
   const body='#!name=example\n[Rule]\nAND, ((DOMAIN, example.com), (PROTOCOL, QUIC)), REJECT';
   const logs=[],context={module:{exports:{}},console:{log:value=>logs.push(value)}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'..','kelee-qx.js'),'utf8'),context);
+  context.module.exports.CONFIG.omitDomainQuicReject=false;
   const response=await context.module.exports.backendResponse({url:'http://127.0.0.1:9999/kelee-qx/resource?url='+encodeURIComponent(sourceURL)},
     async()=>({statusCode:200,headers:{},body}));
   assert.match(response.status,/422/);

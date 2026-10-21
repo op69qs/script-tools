@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.7.0 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.7.1 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,7 +22,11 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.7.0',
+    version: '1.7.1',
+    // Requires [general] udp_drop_list to include QUIC on the device.
+    // Omit ONLY two-leaf domain AND QUIC -> REJECT; the global scope is broader.
+    // The backend cannot verify that device setting. Set false for strict 422.
+    omitDomainQuicReject: true,
     loonUA: 'Loon/991 CFNetwork/3896.100.1.1.1 Darwin/27.0.0',
     accept: 'text/plain, */*;q=0.8',
     hubOrigin: 'https://hub.kelee.one/',
@@ -658,6 +662,23 @@
           if (value.charAt(0) !== '(' || value.charAt(value.length - 1) !== ')') stop('逻辑子规则必须用括号包围。');
           return value.slice(1,-1);
         }
+        function quicOmission(root) {
+          if (CONFIG.omitDomainQuicReject !== true || root[0].toUpperCase() !== 'AND' ||
+              root[2].toUpperCase() !== 'REJECT') return null;
+          var children = split(unwrap(root[1]));
+          if (children.length !== 2) return null;
+          var a = split(unwrap(children[0])), b = split(unwrap(children[1]));
+          if (a[0].toUpperCase() === 'PROTOCOL') {var swap=a;a=b;b=swap;}
+          if (a.length !== 2 || b.length !== 2 || !/^DOMAIN(?:-SUFFIX)?$/i.test(a[0]) ||
+              b[0].toUpperCase() !== 'PROTOCOL' || b[1].toUpperCase() !== 'QUIC') return null;
+          var domain = a[1].replace(/^(["'])([\s\S]*)\1$/,'$2');
+          if (domain.length > 128 || !/^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/i.test(domain)) return null;
+          record.status = 'omitted-by-config';
+          record.mechanism = 'configured-domain-quic-omission';
+          record.reason = '按 omitDomainQuicReject 配置省略域名 AND QUIC 拒绝，前提是主配置 udp_drop_list 包含 QUIC；后端未核验此设备设置，不声称匹配范围等价。';
+          return '# Kelee-QX: omitted domain AND QUIC REJECT by configuration (source line ' +
+            (index + 1) + '); requires [general] udp_drop_list containing QUIC. ' + annotation.prefix + text;
+        }
         function httpReject(root) {
           if (root[0].toUpperCase() !== 'AND' || root[2].toUpperCase() !== 'REJECT') return null;
           var children = split(unwrap(root[1]));
@@ -777,9 +798,13 @@
         var root = split(text);
         if (root.length !== 3 || !/^(?:DIRECT|REJECT|PROXY)$/i.test(root[2]))
           stop('域名逻辑仅验证了 DIRECT/REJECT/PROXY 策略，且不接受额外参数。');
-        var block = httpReject(root), outputCount;
-        if (block !== null) outputCount = 1;
+        var block = quicOmission(root), outputCount;
+        if (block !== null) outputCount = 0;
         else {
+          block = httpReject(root);
+          if (block !== null) outputCount = 1;
+        }
+        if (block === null) {
           var globs = compile(root[0] + ',' + root[1],0);
           block = globs.length ? globs.map(function (glob) { return annotation.prefix + 'host-wildcard, ' + glob + ', ' + root[2]; }).join('\n') :
             '# Kelee-QX: domain logic has an empty intersection.';
@@ -788,10 +813,14 @@
         if (totalRules + outputCount > 512 || totalChars + block.length > 131072)
           resourceStop('整份资源的域名逻辑输出预算已耗尽，保留剩余原文。');
         totalRules += outputCount; totalChars += block.length;
-        record.status = 'converted'; record.outputRules = outputCount;
+        if (record.status === 'unsupported') record.status = 'converted';
+        record.outputRules = outputCount;
         if (Array.isArray(details)) details.push(record);
         return block;
       } catch (error) {
+        record.status = 'unsupported';
+        delete record.mechanism;
+        delete record.outputRules;
         record.reason = messageOf(error);
         if (Array.isArray(details)) details.push(record);
         return line; // The parser may skip it; report the gap, never claim equivalence.
@@ -935,9 +964,14 @@
     if (Array.isArray(logicalDetails) && logicalDetails.length) {
       record.inputLogical = logicalDetails.length;
       record.convertedLogical = logicalDetails.filter(function (entry) { return entry.status === 'converted'; }).length;
-      record.pendingLogical = record.inputLogical - record.convertedLogical;
-      record.logicalState = record.pendingLogical ? 'rejected' : 'matching-set-converted';
-      record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; }).slice(0,10).map(function (entry) {
+      record.omittedQuic = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).length;
+      record.pendingLogical = record.inputLogical - record.convertedLogical - record.omittedQuic;
+      record.logicalState = record.pendingLogical ? 'rejected' : record.omittedQuic ? 'ready-with-quic-omission' : 'matching-set-converted';
+      if (record.omittedQuic) record.quicRequirement = 'udp_drop_list includes QUIC; device setting not verified';
+      record.omittedQuicExamples = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).slice(0,10).map(function (entry) {
+        return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
+      });
+      record.pendingLogicalExamples = logicalDetails.filter(function (entry) { return entry.status !== 'converted' && entry.status !== 'omitted-by-config'; }).slice(0,10).map(function (entry) {
         return {line:entry.line,reason:redact(entry.reason),rule:redactRule(entry.rule).slice(0,2048)};
       });
     }
@@ -1078,7 +1112,7 @@
       if (problem) return responseError(fetched,kind,CONFIG.loonUA);
       var logicalDetails = [];
       var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url,logicalDetails) : fetched.response.body;
-      var pending = logicalDetails.filter(function (entry) { return entry.status !== 'converted'; });
+      var pending = logicalDetails.filter(function (entry) { return entry.status !== 'converted' && entry.status !== 'omitted-by-config'; });
       if (pending.length) {
         var first = pending[0], error = new Error('第 ' + first.line + ' 行 [rule]：尚有 ' + pending.length +
           ' 条逻辑规则无法等价转换，拒绝提供部分配置。' + first.reason);
@@ -1089,6 +1123,11 @@
       success.headers['X-Kelee-QX-Upstream-Status'] = String(fetched.response.statusCode);
       success.headers['X-Kelee-QX-Stage'] = kind === 'resource' ? 'ready-for-parser' : 'script-downloaded';
       if (kind === 'resource') success.headers['X-Kelee-QX-Conversion'] = 'ready-for-parser';
+      var omittedQuic = logicalDetails.filter(function (entry) { return entry.status === 'omitted-by-config'; }).length;
+      if (omittedQuic) {
+        success.headers['X-Kelee-QX-Omitted-QUIC'] = String(omittedQuic);
+        success.headers['X-Kelee-QX-QUIC-Requirement'] = 'general-udp_drop_list-QUIC';
+      }
       traceResource(success.headers['X-Kelee-QX-Stage'],target,fetched,null,kind === 'resource' ? content : undefined,logicalDetails);
       return success;
     } catch (error) {

@@ -1,8 +1,14 @@
 # Kelee → Quantumult X 适配器
 
-`kelee-qx.js` v1.7.0。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
+`kelee-qx.js` v1.7.1。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
 
 ## 本次支持范围
+
+v1.7.1 按允许全局禁用 QUIC 的配置交付 RedPaper 和 PinDuoDuo。**先在 QX 主配置的 `[general]` 设置 `udp_drop_list = QUIC`**；已有 `udp_drop_list` 时在原列表中加入 `QUIC`，保留原端口和协议项，不要另建重复设置。该项作用于所有域名；重写订阅不能设置 `[general]`，后端也没有核验手机设置。
+
+脚本默认 `CONFIG.omitDomainQuicReject = true`，仅将两个叶子的 `AND(DOMAIN 或 DOMAIN-SUFFIX, PROTOCOL QUIC) → REJECT` 留为注释，由上述全局 QUIC 拦截承担；不生成整域 REJECT，也不扩大 TCP 的 MitM 主机列表。这是已允许的范围放宽，不标为匹配集合等价。设为 `false` 可恢复严格检查与 422。其他协议、策略、嵌套逻辑和额外参数继续检查，不能借此绕过 DIRECT 例外。
+
+转换注释、日志的 `omittedQuic` / `quicRequirement` 以及响应头 `X-Kelee-QX-Omitted-QUIC` / `X-Kelee-QX-QUIC-Requirement` 会标明省略条数和安装前提。完整 TXT 与 `QX/kelee-qx.js` 内容一致；替换手机 `Scripts/kelee-qx.js` 后，再更新现有资源。
 
 纯域名正逻辑：`DOMAIN`、`DOMAIN-SUFFIX`、`DOMAIN-KEYWORD` 的 `AND` / `OR` 嵌套，策略限 `DIRECT`、`REJECT`、`PROXY`。
 
@@ -22,16 +28,16 @@ v1.7.0 加入两叶 `AND(URL-REGEX, USER-AGENT) → REJECT` 的通用编译，�
 
 ## 仍有的缺口
 
-- 域名与 `PROTOCOL, QUIC` 的交集：不能用全局关闭 QUIC 替代。
+- 域名与 `PROTOCOL, QUIC` 的交集：v1.7.1 默认按上述已允许的全局禁用 QUIC 方案处理；严格模式仍拒绝，未声称全局方案与原域名范围相等。
 - `URL-REGEX` 与 `USER-AGENT` 的 DIRECT/PROXY 组合、嵌套混合条件及超出上述 UA 范围的规则仍未适配；`url-and-header` 不自行赋予原请求 DIRECT 策略。
 - `NOT`、其他谓词、额外标记、未验证策略：整体拒绝并报告缺口。
 - Spotify：跨主机 `url.replace` 尚无已验证的 QX 等价实现，插件继续整体返回 HTTP 422。手机 TF 953 测试中，只改 URL 和 URL＋Host 两种写法均返回 404；后者显示目标 URL 形态仍不代表连接已经迁移。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。带参数二进制脚本、超时及全 spotify.com 后缀的 QUIC 组合也未完成等价适配。
 
 v1.6.0 的 HTTP 200 / incomplete 仍会让解析器跳过逻辑。本次已复现 HTTPDNS 的 DIRECT 例外丢失后落入更宽 REJECT 的反例，因此改成整体 422，响应带有 `X-Kelee-QX-Conversion: rejected`。QX 日志和错误正文记录 `pendingLogical`、插件、来源、原始行号、原因及脱敏规则摘要。后端拒绝不完整替换，不承诺客户端遇到更新失败后的缓存行为。
 
-本轮 11 份上游资源中，7 份通过文本转换与真实 KOP 解析，4 份仍拒绝。原六条逻辑中，PinDuoDuo 的两条 URL/UA REJECT 已加入通用编译；RedPaper、PinDuoDuo、Block_HTTPDNS 合计还剩 4 条逻辑未完成适配，Spotify 仍有 URL 改写及二进制执行缺口。PinDuoDuo 现在首先报告第 16 行 QUIC 组合，整份资源仍为 422。BlockAdvertisers 的 4 条纯域名组合仍转成 11 条交集分支。
+v1.7.1 对 11 份最新上游执行完整下载、转换及真实 KOP 解析：9 份通过，Spotify 与 Block_HTTPDNS 仍整体拒绝。RedPaper 和 PinDuoDuo 各按配置省略一条 QUIC 拒绝；拼多多两条 URL/UA REJECT 仍保留，21 条 RedPaper 重写、29 条 PinDuoDuo 重写及其余分流、MitM 主机均完成文本核对。16 个交付脚本依赖下载成功、内容未改且语法检查通过。BlockAdvertisers 的 4 条纯域名组合仍转成 11 条交集分支。上述为文本和解析器验证，不代替手机运行。
 
-手机上这四份显示“Status code 422”与上述拒绝一致，表示仍未完整适配。上述计数不包含 Spotify 自己的另一条域名/QUIC 组合；其首个 URL 转换错误会先终止检查。详见[四个 422 的原因和实机记录](compatibility-research-2026-10-20.md#手机截图中的四个-422)。
+历史截图的四个 422 及原始测试见[研究记录](compatibility-research-2026-10-20.md#手机截图中的四个-422)。本次 RedPaper、PinDuoDuo 已通过交付检查；Spotify 的跨主机 URL 转换错误仍先终止检查，不会为了省略其 QUIC 条目而绕过后续错误。
 
 TF 变化、仍在维护的脚本及等价性分析见[研究记录](compatibility-research-2026-10-20.md)。Spotify 原生 URL 行为可用[独立手机探针](probes/README.md)验证；探针需手动启用，不随生产订阅安装。
 

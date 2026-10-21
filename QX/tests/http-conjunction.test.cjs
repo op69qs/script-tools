@@ -108,7 +108,10 @@ test('comments and non-rule sections do not create false routing conflicts',()=>
     '\n[Argument]\nnote=DOMAIN, a, DIRECT';
   assert.match(api.prepareResourceContent(body,target),/ url-and-header reject-200/);
 });
-test('DIRECT conjunctions and QUIC conditions still cannot be silently omitted',async()=>{
+test('strict mode keeps QUIC pending and DIRECT conjunctions cannot be omitted',async()=>{
+  const previous=api.CONFIG.omitDomainQuicReject;
+  api.CONFIG.omitDomainQuicReject=false;
+  try {
   const body='[Rule]\n'+input()+'\nAND, ((DOMAIN, api.example.com), (PROTOCOL, QUIC)), REJECT';
   const details=[],prepared=api.prepareResourceContent(body,target,details);
   assert.match(prepared,/ url-and-header reject-200/);
@@ -119,6 +122,7 @@ test('DIRECT conjunctions and QUIC conditions still cannot be silently omitted',
   assert.match(response.body,/"pendingLogical":\s*1/);
   const direct='[Rule]\n'+input(url,'App*',false,'DIRECT');
   assert.equal(api.prepareResourceContent(direct,target),direct);
+  }finally{api.CONFIG.omitDomainQuicReject=previous;}
 });
 test('unverified UA encoding and escape forms remain explicit failures',()=>{
   for(const ua of ['%E5%98%80*','中文*',String.raw`App\*`,'','*','**','App?',' * ']) {
