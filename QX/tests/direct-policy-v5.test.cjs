@@ -13,10 +13,10 @@ test('the active subscription uses only v5 for all three DIRECT hooks',()=>{
 function source(){assert.ok(fs.existsSync(file),'native-reference probe v5 has not been implemented');return fs.readFileSync(file,'utf8');}
 function harness({prefs=new Map(),mode='filter',fetcher}={}) {
   const calls=[];
-  async function run(url,{response,method='GET'}={}) {
+  async function run(url,{response,method='GET',headers}={}) {
     let finish;
     const completed=new Promise(resolve=>{finish=resolve;});
-    const done=[],context={$request:{url,method},$environment:{version:'QX TF953'},setTimeout,clearTimeout,
+    const done=[],context={$request:{url,method,headers},$environment:{version:'QX TF953'},setTimeout,clearTimeout,
       $done:r=>{done.push(r);finish();},$prefs:{valueForKey:k=>prefs.get(k),
         setValueForKey:(v,k)=>{prefs.set(k,v);return true;},removeValueForKey:k=>prefs.delete(k)},
       $configuration:{sendMessage:async m=>{assert.equal(m.action,'get_running_mode');return {ret:mode};}},
@@ -132,6 +132,25 @@ test('request payloads test each spelling on the original operation without poli
     assert.equal(payload.policy,mode==='policy-direct'?'direct':undefined);
     assert.equal(payload.opts&&payload.opts.policy,mode==='opts-direct'?'direct':undefined);
     assert.ok(payload.headers['X-Kelee-QX-Direct-Probe']);
+  }
+  assert.equal(h.calls.length,0);
+});
+
+test('request hooks preserve original headers and replace only diagnostic fields without duplicates or mutation',async()=>{
+  const original=Object.freeze({Host:'httpbin.org','uSeR-aGeNt':'fixture-agent/1.0',Accept:'text/html',
+    Cookie:'fixture-cookie',Authorization:'fixture-auth','X-Other':'keep',
+    'cache-control':'old-cache',CONNECTION:'keep-alive','x-kelee-qx-direct-probe':'stale-marker'});
+  const snapshot=JSON.stringify(original),h=harness();
+  for(const transport of ['http','https'])for(const mode of ['control','policy-direct','opts-direct']){
+    const {payload}=await h.run(base.replace('https:',transport+':')+'/request?mode='+mode+'&id='+id+'-1',{headers:original});
+    for(const name of ['Host','uSeR-aGeNt','Accept','Cookie','Authorization','X-Other'])
+      assert.equal(payload.headers[name],original[name],name+' must be preserved');
+    assert.notEqual(payload.headers,original);
+    for(const [name,value] of [['Cache-Control','no-cache'],['Connection','close'],['X-Kelee-QX-Direct-Probe',id+'-1']]){
+      const matching=Object.keys(payload.headers).filter(key=>key.toLowerCase()===name.toLowerCase());
+      assert.equal(matching.length,1,name+' must have one spelling');assert.equal(payload.headers[matching[0]],value);
+    }
+    assert.equal(JSON.stringify(original),snapshot);
   }
   assert.equal(h.calls.length,0);
 });

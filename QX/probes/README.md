@@ -6,6 +6,10 @@
 
 当前使用 v5，页面地址不变，报告开头应为 `kelee-qx-direct-policy-browser-v5`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试，不用于本次补测。
 
+已收到 HTTP v5 手机结果：control-0 正常回显，但与 DIRECT 参考相同；用户随后在该条活动中确认最终策略为 DIRECT。两种被测 DIRECT 参数尚未执行，不能据此判断它们有效或无效。先查看同一条 `/request?mode=control`、编号末尾 `-0` 记录的**命中规则及最终策略链**，不要查看本地生成的 dashboard 或本来就指定 DIRECT 的 `direct-probe-reference`。规则未生效前不重复整套测试。
+
+v5 请求头现已修正：复制原头部，仅以不区分字段名大小写的方式替换测试标记、Cache-Control 和 Connection；保留 Host、User-Agent、Accept 及其他原字段，也不修改原对象。此前全新四字段头部会丢弃原字段，是已确认的探针缺陷；尚未证明这就是临时 host 分流未生效的原因。此修正不更改生产 HTTPDNS 规则。
+
 1. 在 QX 添加最前面的临时本地分流：类型 host／主机名、内容 `httpbin.org`、策略选已确认可用的代理节点或组。这只建立测试对照，不修改 HTTPDNS 生产规则。
 2. 更新现有 `policy-probe.snippet` 测试资源，资源解析器保持关闭；Safari 打开[HTTP DIRECT 页面](http://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，点开始。HTTPDNS 原规则是明文 HTTP，因此本次优先测 HTTP。
 3. 等 `finished: true` 后复制完整 JSON。测试完成删除临时 `httpbin.org` 分流。

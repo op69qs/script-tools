@@ -4,6 +4,10 @@
 
 ## 继续处理完整 Spotify / HTTPDNS
 
+HTTP v5 手机结果只执行了 control-0，正常回显与 DIRECT 参考相同，随后用户确认该条原生活动最终策略为 DIRECT。因此停止继续解释出口对比；两个被测 DIRECT 参数均未执行。下一步只读取现有记录的命中规则及最终策略链，区分临时 host 规则未命中、所选组最终为 DIRECT 或其他原因，不重复相同条件。审查同时发现 v5 请求 hook 丢弃原 Host/UA 等字段；已修为复制原头部，只更新 marker、Cache-Control、Connection，并补 HTTP/HTTPS、三种模式、字段大小写及不可变对象回归。已知缺陷的修复不等于已经证实了路由失败原因，也未据此放行 HTTPDNS。
+
+补查今天仍有更新的 [Script Hub Beta](https://github.com/Script-Hub-Org/Script-Hub/blob/d9d7473831c057ac0c28ba15c01a0a351099d95d/Rewrite-Parser.beta.js)：目标白名单为 Surge、Shadowrocket、Loon、Stash，`normalizeLoonV2RewriteToSurge` 的 `url.replace` 映射和 `normalizeLoonV2Timeout` 的 timeout 保留针对这些宿主，不提供 QX 目标。不能把它支持 Loon v2 的介绍当作 QX 跨主机或 timeout 方案。[项目说明](https://github.com/Script-Hub-Org/Script-Hub#loon-script-v2-跨端转换beta)同样列出了这些目标。
+
 用户确认先前 httpbin.org 原生连接走 DIRECT；临时改成 host 代理后，v4 仍只有 FETCH 校准、未运行任何原生请求。v5 改为仅取明确的 DIRECT FETCH 前后参考，首个浏览器原生 control 自己建立另一参考，避免再用失败的代理 FETCH 作为门槛。三条 controls、被测请求及 verify 必须使用同一个随机原生参考编号；任一出口、编号或 DIRECT 参考变化均不作正结论。
 
 HTTPDNS 两条原规则是明文 HTTP，故 v5 同时提供协议隔离的 HTTP/HTTPS 页面并优先测 HTTP。固定服务的明文 GET 已在桌面确认返回 200、原 HTTP URL 回显及 origin 字段；这仅确认端点可用，不能代替手机路由观察。HTTP 被自动升级、重定向或回显协议不符均不算 HTTP 成功。新版仍未放行两条生产 DIRECT。

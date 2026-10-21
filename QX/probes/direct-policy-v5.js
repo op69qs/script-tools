@@ -198,7 +198,12 @@
   if(!selected){$done({});return;}
   var mode=selected[1],id=selected[2],ordinal=selected[3],marker=id+'-'+ordinal;
   if(typeof $response==='undefined'){
-    var payload={headers:{Accept:'application/json','Cache-Control':'no-cache',Connection:'close','X-Kelee-QX-Direct-Probe':marker}};
+    var headers=Object.create(null),originalHeaders=request.headers||{};
+    Object.keys(originalHeaders).forEach(function(name){
+      if(!/^(?:cache-control|connection|x-kelee-qx-direct-probe)$/i.test(name))headers[name]=originalHeaders[name];
+    });
+    headers['Cache-Control']='no-cache';headers.Connection='close';headers['X-Kelee-QX-Direct-Probe']=marker;
+    var payload={headers:headers};
     if(mode==='policy-direct')payload.policy='direct';else if(mode==='opts-direct')payload.opts={policy:'direct'};
     $done(payload);return;
   }
