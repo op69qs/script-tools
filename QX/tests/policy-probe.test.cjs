@@ -136,7 +136,7 @@ test('browser network failures stay explicit and cannot be mistaken for policy s
 test('the opt-in snippet matches only the dashboard, calibration and fixed native cases',()=>{
   const snippet=path.join(__dirname,'..','probes','policy-probe.snippet');
   assert.ok(fs.existsSync(snippet),'standalone snippet is missing');
-  const body=fs.readFileSync(snippet,'utf8'),rules=body.split('\n').filter(line=>line.includes(' url '));
+  const body=fs.readFileSync(snippet,'utf8'),rules=body.split('\n').filter(line=>line.includes('kelee-qx-policy-probe/') && line.includes(' url '));
   assert.equal(rules.length,3);
   for(const u of [base+'/dashboard',base+'/calibration',url('control'),url('policy'),url('opts-policy')])
     assert.ok(rules.some(rule=>new RegExp(rule.split(' url ')[0]).test(u)),u);

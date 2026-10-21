@@ -2,6 +2,16 @@
 
 用于核实当前 TF 对 $done({url}) 的行为，不是 Spotify 去广告规则。它只使用固定测试 URL，不使用重定向或重新发请求作补偿。主适配器和 remoteSnippet 不会安装或启用它。
 
+## DIRECT 原请求补测
+
+已完成下面的 reject 测试时，只需在 QX 更新已有 `policy-probe.snippet` 资源，再用 Safari 打开[DIRECT 对照页面](https://httpbin.org/anything/kelee-qx-direct-probe/dashboard)，点“开始测试”，等 `"finished": true` 后复制结果。新脚本使用独立文件地址，避开上一轮脚本缓存；无需修改生产分流或全局模式。
+
+测试前后分别用官方 FETCH 的 `opts.policy: direct/proxy` 建立出口参考，中间执行原生 control / policy-direct / control / opts-direct / control。FETCH 只建立参考，原请求不重发。比较只输出布尔值，原始 IP 不保存；运行期间每个 run 使用自己的专用 prefs 键，保存带随机盐的 SHA256、运行编号、两分钟有效期及清理用的 token，结束删除自己的键，不操作其他设置。超时清理后的迟到校准结果不会恢复参考记录。
+
+只有前后参考稳定、DIRECT 与 PROXY 可区分、三个原生对照都呈现 PROXY 参考出口，且测试请求呈现 DIRECT 参考出口，页面才报告本次观察到 DIRECT 出口效应。对照已直连、出口轮换、网络失败或引用缺失均保持不确定。`Connection: close` 是尽力减少复用，不能保证排除 HTTP/2 连接复用；未观察到 DIRECT 不推断所有新连接或其他运行模式均不支持。页面读取当前运行模式作参考，不修改模式或策略组。
+
+这一步直接验证 DIRECT 值，避免把下述 reject 写法没有执行的结果推广为所有策略值的结论。
+
 ## 原请求策略测试
 
 用于判断 HTTPDNS 两条 DIRECT 例外是否有逐请求策略接口可以利用；不需要 Loon，也不需要再做 Spotify 的 URL 测试。
@@ -13,6 +23,8 @@
 页面按顺序执行：原生 GET 对照、`$done({policy:"reject"})`、对照、`$done({opts:{policy:"reject"}})`、对照。实际请求带固定标记；响应仅返回标记是否被服务器回显、状态及版本，不返回原始正文或 IP。另有一项独立 `$task.fetch` 的 reject 校准，不能将它当作原请求接口生效。
 
 `reject-not-enforced-on-this-request` 表示请求脚本的标记到达了服务器，且拿到该固定端点的 200，所测 reject 没有阻止这次原请求。失败、超时、404 或缺少标记均不能单独证明策略生效；报告保持 `provesFullEquivalence: false`。测试不会修改任何生产规则、策略组或全局模式，也不将两条 DIRECT 例外改为重发请求。
+
+用户在 TF 953 已完成本项：三次 control 均 200、原端点及标记回显为真；policy 与 opts-policy 两种 reject 写法也都收到同样的 200 回显。FETCH reject 校准为 Promise rejected。结论仅为这两种写法没有在这些原请求上执行 reject；不据此否定 DIRECT 或其他接口。
 
 ## 手动测试
 

@@ -29,6 +29,8 @@ UA 大小写依据来自[官方 Loon4Mac 0.4.0（991）发布包](https://github
 
 该测试只验证这两种携带 reject 的写法，不由结果推断所有逐请求策略接口或 DIRECT 的支持情况。校准 Promise 被拒绝也不自动证明 reject 策略合法且已经生效。
 
+用户随后在 TF 953 完成测试：三个原生 control 均返回 200 且原端点、脚本标记回显为真；`policy: reject` 与 `opts.policy: reject` 两个原请求也均返回相同回显，所测 reject 未执行。FETCH reject 校准 Promise 被拒绝。为直接验证 DIRECT 值，补充[DIRECT／PROXY 前后出口对照](probes/README.md#direct-原请求补测)：已知 FETCH 接口只建立参考，不用于重发原请求；出口不稳定或基线已直连则不作能力结论。
+
 ## 原六条逻辑（其中两条已编译）
 
 | 来源 | 条数与原条件 | 候选方案 | 仍缺的等价性证据 |
