@@ -1,5 +1,5 @@
 /*
- * Kelee → Quantumult X install adapter, v1.7.2 (2026-10-20)
+ * Kelee → Quantumult X install adapter, v1.8.0 (2026-10-20)
  * Original local-use implementation. Not affiliated with Kelee or Quantumult X.
  * Save in Quantumult X/Scripts/kelee-qx.js. See README.md and install.conf.
  * The backend now serves a native rewrite_remote subscription and its script.
@@ -22,7 +22,7 @@
   // Kelee may apply different access controls to plugin files and JavaScript assets,
   // so upstream errors are surfaced instead of being treated as a successful resource.
   var CONFIG = {
-    version: '1.7.2',
+    version: '1.8.0',
     // Relax only two-leaf domain AND QUIC -> REJECT. MitM mode relies on
     // existing hostname coverage only; it never adds TLS interception hosts.
     // Use 'global' for udp_drop_list=QUIC. Set omission false for strict 422.
@@ -346,15 +346,156 @@
     }
     return out;
   }
+  function responseBridgeSpec(value) {
+    if (!value || Object.prototype.toString.call(value) !== '[object Object]' ||
+        typeof value.binary !== 'boolean' || Object.keys(value).some(function(key){return key !== 'binary' && key !== 'argument';}))
+      throw new Error('响应桥接参数格式无效。');
+    var argument = value.argument === undefined ? null : value.argument;
+    function scalar(item) {
+      return item === null || typeof item === 'string' || typeof item === 'boolean' ||
+        typeof item === 'number' && isFinite(item);
+    }
+    if (argument !== null && typeof argument !== 'string') {
+      if (Object.prototype.toString.call(argument) !== '[object Object]' ||
+          Object.keys(argument).some(function(key) {
+            return !/^[a-z_]\w*$/i.test(key) || /^(?:__proto__|prototype|constructor)$/.test(key) || !scalar(argument[key]);
+          })) throw new Error('响应桥接仅接受字符串或保留标量类型的参数对象。');
+    }
+    var spec = {binary:value.binary,argument:argument};
+    if (JSON.stringify(spec).length > 8192) throw new Error('响应桥接参数过长。');
+    return spec;
+  }
+  // Serialized into each selected asset. Do not refer to backend-only helpers.
+  function loonResponseRuntime(spec) {
+    var global = this, completed = false, nativeDone = global.$done;
+    function finish(value) {if(!completed){completed=true;nativeDone(value || {});}}
+    function log(message) {try{console.log(message);}catch(_){}}
+    function bytes(value) {
+      var kind = Object.prototype.toString.call(value);
+      if(kind === '[object ArrayBuffer]')return new Uint8Array(value);
+      if(kind === '[object Uint8Array]')return new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+      throw new Error('Binary body is unavailable or has an unsupported type');
+    }
+    function done(result) {
+      if(completed)return;
+      try {
+        var out = {};
+        if(result !== undefined && result !== null) {
+          if(Object.prototype.toString.call(result) !== '[object Object]')throw new Error('Unsupported response result');
+          Object.keys(result).forEach(function(key) {
+            var value=result[key];
+            if(value === undefined)return;
+            if(key === 'body') {
+              if(typeof value === 'string')out.body=value;
+              else {
+                var view=bytes(value);
+                out.bodyBytes=view.buffer.slice(view.byteOffset,view.byteOffset+view.byteLength);
+              }
+            } else if(key === 'headers')out.headers=value;
+            else if(key === 'status' || key === 'statusCode') {
+              if(typeof value !== 'number' || value%1 || value<100 || value>599)throw new Error('Unsupported response status');
+              var status='HTTP/1.1 '+value+' ';
+              if(out.status && out.status!==status)throw new Error('Conflicting response status');
+              out.status=status;
+            } else throw new Error('Unsupported response result property');
+          });
+        }
+        finish(out);
+      } catch(_) {
+        log('[Kelee-QX response bridge] Unsupported response result; original response retained.');
+        finish({});
+      }
+    }
+    try {
+      if(!global.$response || typeof nativeDone !== 'function')throw new Error('Response context required');
+      var response = {};
+      Object.keys(global.$response).forEach(function(key){response[key]=global.$response[key];});
+      response.status=Number(global.$response.statusCode);
+      if(spec.binary)response.body=bytes(global.$response.bodyBytes);
+      delete response.bodyBytes;
+      global.$response=response;
+      global.$argument=spec.argument;
+      global.$done=done;
+      if(global.$response!==response || global.$argument!==spec.argument || global.$done!==done)
+        throw new Error('Host bindings cannot be replaced');
+    } catch(_) {
+      log('[Kelee-QX response bridge] Initialization failed; original response retained.');
+      finish({});
+      throw new Error('Kelee-QX response bridge initialization failed');
+    }
+  }
+  // Keep the original directive prologue before initialization. The upstream
+  // program remains at global scope; no Function/eval or enclosing function.
+  function scriptPrologueEnd(source) {
+    var at=0, end=0;
+    if(source.slice(0,2)==='#!') {
+      at=source.search(/[\r\n\u2028\u2029]/);
+      if(at===-1)return source.length;
+      at+=source.slice(at,at+2)==='\r\n'?2:1;
+      end=at;
+    }
+    function trivia() {
+      var newline=false;
+      while(at<source.length) {
+        if(/\s|\uFEFF/.test(source.charAt(at))) {
+          if(/[\r\n\u2028\u2029]/.test(source.charAt(at)))newline=true;
+          at++;continue;
+        }
+        if(source.slice(at,at+2)==='//' || source.slice(at,at+4)==='<!--' || source.slice(at,at+3)==='-->') {
+          while(at<source.length && !/[\r\n\u2028\u2029]/.test(source.charAt(at)))at++;
+          continue;
+        }
+        if(source.slice(at,at+2)==='/*') {
+          var close=source.indexOf('*/',at+2);
+          if(close===-1)return {newline:newline,invalid:true};
+          if(/[\r\n\u2028\u2029]/.test(source.slice(at,close+2)))newline=true;
+          at=close+2;continue;
+        }
+        break;
+      }
+      return {newline:newline};
+    }
+    while(at<source.length) {
+      if(trivia().invalid)return end;
+      var quote=source.charAt(at);
+      if(quote!=='"' && quote!=="'")return end;
+      var closed=false;
+      for(at++;at<source.length;at++) {
+        var ch=source.charAt(at);
+        if(ch==='\\') {
+          if(source.charAt(at+1)==='\r' && source.charAt(at+2)==='\n')at++;
+          at++;continue;
+        }
+        if(ch===quote){at++;closed=true;break;}
+        if(/[\r\n]/.test(ch))return end;
+      }
+      if(!closed)return end;
+      var after=trivia();
+      if(after.invalid)return end;
+      if(source.charAt(at)===';'){end=++at;continue;}
+      if(at===source.length)return at;
+      // An operator, member access, call, indexing or tagged template continues
+      // the expression even across a newline; it is not a directive statement.
+      var next=source.slice(at),continuation=/^(?:[([.`?*\/%<>=&|^,:]|\+(?!\+)|-(?!-)|!=|(?:in|instanceof)(?=$|\s|[^a-zA-Z0-9_$\\\u0080-\uffff]))/.test(next);
+      if(!after.newline || continuation)return end;
+      end=at;
+    }
+    return end;
+  }
+  function wrapLoonResponseScript(source, value) {
+    var spec=responseBridgeSpec(value),text=String(source),head=scriptPrologueEnd(text);
+    return text.slice(0,head)+'\n;/* Kelee-QX response body/argument bridge; no request replay. */\n('+
+      loonResponseRuntime.toString()+').call(this,'+jsonForScript(spec)+');\n'+text.slice(head)+'\n';
+  }
   /**
    * Parse the observed conditional DSL as data; never eval upstream content.
    * Supported: URL regex + script(), request reject*(), JSON replace/jq/delete.
    * Consume the entire line, preserve regex groups/flags, and fail atomically.
    * Unsupported actions/conditions are not silently removed from a subscription.
    */
-  function normalizeConditionalRules(content, originalURL) {
-    var section = '', inComment = false;
-    return String(content || '').split('\n').map(function (line, index) {
+  function normalizeConditionalRules(content, originalURL, argumentOverrides) {
+    var section = '', inComment = false, usedOverrides = Object.create(null);
+    var normalized = String(content || '').split('\n').map(function (line, index) {
       var text = line.trim();
       if (inComment) { if (text.indexOf('*/') !== -1) inComment = false; return line; }
       if (/^\/\*/.test(text)) { inComment = text.indexOf('*/', 2) === -1; return line; }
@@ -482,7 +623,46 @@
           "'" + expression.replace(/'/g,"\\'") + "'";
       }
       if (name === 'script') {
-        var script = value(0); token(')');
+        var script = value(0), scriptArgument = null, hasArgument = false;
+        space();
+        if(text.charAt(at) === ',') {
+          at++;space();hasArgument=true;
+          if(text.charAt(at) === '{') {
+            at++;scriptArgument=Object.create(null);
+            while(at < text.length) {
+              space();
+              var reference=text.slice(at).match(/^\$\{([a-z_]\w*)\}/i);
+              if(!reference)fail('插件参数对象仅接受已声明的参数引用。');
+              var parameter=reference[1],definitions=[],argumentSection='',argumentComment=false;
+              if(Object.prototype.hasOwnProperty.call(scriptArgument,parameter))fail('插件参数引用重复。');
+              String(content).split('\n').forEach(function(raw) {
+                var line=raw.trim();
+                if(argumentComment){if(line.indexOf('*/')!==-1)argumentComment=false;return;}
+                if(/^\/\*/.test(line)){argumentComment=line.indexOf('*/',2)===-1;return;}
+                if(/^\[[^\]]+\]$/.test(line)){argumentSection=line.toLowerCase();return;}
+                if(argumentSection!=='[argument]')return;
+                var entry=line.match(/^([a-z_]\w*)\s*=\s*(.*)$/i);
+                if(entry && entry[1]===parameter)definitions.push(entry[2]);
+              });
+              if(definitions.length!==1)fail('插件参数必须唯一声明：'+parameter);
+              var initial=definitions[0].match(/^switch\s*,\s*(true|false)(?=\s*(?:,|$))/i);
+              if(!initial)fail('插件参数对象目前仅适配有明确布尔默认值的 switch：'+parameter);
+              var selected=argumentOverrides && Object.prototype.hasOwnProperty.call(argumentOverrides,parameter)
+                ? argumentOverrides[parameter] : initial[1].toLowerCase()==='true';
+              if(typeof selected!=='boolean')fail('switch 参数覆盖值必须是布尔值：'+parameter);
+              if(argumentOverrides && Object.prototype.hasOwnProperty.call(argumentOverrides,parameter))usedOverrides[parameter]=true;
+              scriptArgument[parameter]=selected;
+              at+=reference[0].length;space();
+              if(text.charAt(at)==='}'){at++;break;}
+              token(',');
+            }
+          } else {
+            scriptArgument=value(0);
+            if(typeof scriptArgument!=='string')fail('普通脚本参数必须是字符串。');
+            if(scriptArgument.indexOf('${')!==-1)fail('脚本字符串参数模板尚未适配，请保留原始参数形式。');
+          }
+        }
+        token(')');
         if (typeof script !== 'string' || !script) fail('脚本地址必须是非空字符串。');
         space();
         if (!/^with\s+/.test(text.slice(at))) fail('脚本必须显式指定 requires_body。');
@@ -494,7 +674,8 @@
           if (!key) fail('脚本选项格式无效。');
           at += key[0].length;
           var option = key[1].replace(/-/g,'_');
-          if ((option !== 'requires_body' && option !== 'tag') || Object.prototype.hasOwnProperty.call(options,option)) fail('脚本含未知或重复选项。');
+          if ((option !== 'requires_body' && option !== 'tag' && option !== 'binary_body_mode') ||
+              Object.prototype.hasOwnProperty.call(options,option)) fail('脚本含未知、尚未适配或重复选项（超时未静默忽略）。');
           options[option] = value(0); space();
           if (at === text.length) break;
           token(',');
@@ -502,10 +683,24 @@
         }
         if (options.requires_body !== true && options.requires_body !== false && options.requires_body !== 1 && options.requires_body !== 0) fail('requires_body 必须显式设为 true/false 或 1/0。');
         if (options.tag !== undefined && typeof options.tag !== 'string') fail('tag 必须是字符串。');
+        if(options.binary_body_mode!==undefined && typeof options.binary_body_mode!=='boolean')
+          fail('binary_body_mode 必须是布尔值。');
+        var bridge=options.binary_body_mode===true || hasArgument;
+        if(bridge && (mode!=='response' || !options.requires_body))
+          fail('正文及参数桥接目前仅适配 response requires_body=true。');
         finish();
         var absolute = resolveRelative(originalURL,script);
         if (!absolute || !tools.validHTTPS(absolute)) fail('脚本地址必须解析为有效的 HTTPS 地址。');
         var next = tools.allowed(absolute,'asset') ? tools.localResource(absolute,'asset') : absolute;
+        if(bridge) {
+          if(!tools.allowed(absolute,'asset'))fail('正文及参数桥接只支持本机允许范围内的 Kelee 脚本。');
+          var hash=next.indexOf('#'),suffix=hash===-1?'':next.slice(hash);
+          if(hash!==-1)next=next.slice(0,hash);
+          var spec;
+          try {spec=responseBridgeSpec({binary:options.binary_body_mode===true,argument:scriptArgument});}
+          catch(error) {fail(error.message);}
+          next+='&loon='+encodeURIComponent(JSON.stringify(spec))+suffix;
+        }
         // QX rules are whitespace-delimited. Percent-encode URL punctuation only.
         next = next.replace(/,/g,'%2C');
         return protectParserPattern(pattern) + ' url script-' + mode + '-' + (options.requires_body ? 'body' : 'header') + ' ' + next;
@@ -537,6 +732,13 @@
       }
       fail('此条件动作尚无可靠转换，未返回不完整配置。');
     }).join('\n');
+    Object.keys(argumentOverrides || {}).forEach(function(name) {
+      if(!usedOverrides[name]) {
+        var error=new Error('传入的插件参数未被任何已适配脚本引用：'+name);
+        error.keleeStage='resource-conversion';throw error;
+      }
+    });
+    return normalized;
   }
   function normalizeLoonScriptRules(content) {
     var section = '', inComment = false;
@@ -846,7 +1048,7 @@
       }
     }).join('\n');
   }
-  function prepareResourceContent(content, originalURL, logicalDetails) {
+  function prepareResourceContent(content, originalURL, logicalDetails, argumentOverrides) {
     var original = String(content || '').split('\n'), notes = [], section = '', inComment = false;
     var bare = original.map(function (line, index) {
       var text = line.trim();
@@ -864,7 +1066,7 @@
       return annotation.body;
     }).join('\n');
     try {
-      var dependencies = rewriteDependencies(normalizeConditionalRules(bare,originalURL),originalURL);
+      var dependencies = rewriteDependencies(normalizeConditionalRules(bare,originalURL,argumentOverrides),originalURL);
       var normalized = normalizeLoonScriptRules(normalizeSafeLoonRewritePatterns(dependencies));
       // All preceding transforms retain one line per input; expand logic LAST.
       var annotated = normalized.split('\n').map(function (line,index) { return notes[index] + line; }).join('\n');
@@ -1127,6 +1329,27 @@
     if (!kind) return reply(404,'Unknown local backend route.');
     var target = queryValue(request.url,'url');
     if (!target || !tools.allowed(target,kind)) return reply(400,'目标不在允许的 kelee.one 插件/脚本资源范围内。');
+    var scriptSpec = null, argumentOverrides;
+    try {
+      if(kind === 'asset' && /(?:[?&])loon=/.test(request.url.split('#')[0])) {
+        if((request.url.split('#')[0].match(/(?:[?&])loon=/g)||[]).length!==1)
+          throw new Error('响应桥接参数不能重复。');
+        var encodedSpec=queryValue(request.url,'loon');
+        if(!encodedSpec || encodedSpec.length>8192)throw new Error('响应桥接参数为空或过长。');
+        scriptSpec=responseBridgeSpec(JSON.parse(encodedSpec));
+      }
+      if(kind === 'resource' && /(?:[?&])args=/.test(request.url.split('#')[0])) {
+        if((request.url.split('#')[0].match(/(?:[?&])args=/g)||[]).length!==1)throw new Error('插件参数不能重复。');
+        var encodedArguments=queryValue(request.url,'args');
+        if(!encodedArguments || encodedArguments.length>8192)throw new Error('插件参数为空或过长。');
+        argumentOverrides=JSON.parse(encodedArguments);
+        if(!argumentOverrides || Object.prototype.toString.call(argumentOverrides)!=='[object Object]' ||
+            Object.keys(argumentOverrides).some(function(key) {
+              return !/^[a-z_]\w*$/i.test(key) || /^(?:__proto__|prototype|constructor)$/.test(key) ||
+                typeof argumentOverrides[key]!=='boolean';
+            }))throw new Error('当前插件参数覆盖只接受布尔 switch。');
+      }
+    } catch(error) {return reply(400,'Kelee-QX 参数无效，未下载上游资源。');}
     if (typeof fetcher !== 'function') return reply(502,'QX $task.fetch 不可用。请检查 http_backend 配置。');
     if (p.path === '/kelee-qx/diagnose') return diagnose(target,fetcher);
     traceResource('download-start',target);
@@ -1135,7 +1358,8 @@
       var problem = bodyProblem(fetched.response,kind);
       if (problem) return responseError(fetched,kind,CONFIG.loonUA);
       var logicalDetails = [];
-      var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url,logicalDetails) : fetched.response.body;
+      var content = kind === 'resource' ? prepareResourceContent(fetched.response.body,fetched.url,logicalDetails,argumentOverrides)
+        : scriptSpec ? wrapLoonResponseScript(fetched.response.body,scriptSpec) : fetched.response.body;
       var pending = logicalDetails.filter(function (entry) { return entry.status !== 'converted' && entry.status !== 'omitted-by-config'; });
       if (pending.length) {
         var first = pending[0], error = new Error('第 ' + first.line + ' 行 [rule]：尚有 ' + pending.length +
@@ -1160,7 +1384,7 @@
         var conversion = reply(422,'Kelee-QX 资源转换失败\n' + redact(messageOf(error)) +
           '\n插件：' + record.plugin + ' (' + record.filename + ')' +
           '\n资源：' + record.finalSource + '\n后端版本：' + CONFIG.version +
-          '\n原始规则' + (record.truncated ? '（已截断，完整行请查看原始插件）' : '') + '：\n' + record.rule +
+          '\n原始规则' + (record.truncated ? '（已截断，完整行请查看原始插件）' : '') + '：\n' + (record.rule || '（见参数绑定诊断）') +
           '\n\n诊断报告（与 QX 日志相同）：\n' + JSON.stringify(record,null,2) +
           '\n未返回部分成功配置。请保留原配置，反馈时附上这份诊断报告。');
         conversion.headers['X-Kelee-QX-Stage'] = 'resource-conversion';
@@ -1176,7 +1400,7 @@
   }
 
   var exportsAPI = {
-    CONFIG: CONFIG, toQX:tools.toQX, extractPlugin:tools.extractPlugin,
+    CONFIG: CONFIG, toQX:tools.toQX, extractPlugin:tools.extractPlugin, wrapLoonResponseScript:wrapLoonResponseScript,
     patchPrefixes:patchPrefixes, rewriteResponse:rewriteResponse,
     rewriteDependencies:rewriteDependencies, normalizeConditionalRules:normalizeConditionalRules, normalizeLoonScriptRules:normalizeLoonScriptRules, normalizeSafeLoonRewritePatterns:normalizeSafeLoonRewritePatterns, prepareResourceContent:prepareResourceContent, backendResponse:backendResponse,
     bodyProblem:bodyProblem, browserHelper:browserHelper, createLinkTools:createLinkTools,

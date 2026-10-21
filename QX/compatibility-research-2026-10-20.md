@@ -2,6 +2,18 @@
 
 核查日期：2026-10-20；以下日期按 America/Los_Angeles。用户使用 TestFlight，因此本轮以公开可核实的 **TF 1.9.0（953）** 为基准。版本更新、规则解析成功、手机运行和跨客户端行为等价分别验证，不相互替代。
 
+## v1.8.0：响应二进制与布尔参数桥接
+
+TF 953 手机报告 `kelee-qx-response-runtime-v1`：三个 bindingWritable、lexicalBindingsUpdated、binaryInputAvailable、statusMapped 以及 globalResponseExposed/globalDoneExposed 均为 true，结论为 `response-runtime-capabilities-observed`。它确认本机宿主能力，不宣称任意 Loon API 或完整 Spotify 等价。
+
+实现按当前 [Loon Script 参数约定](https://nsloon.app/en/docs/Script/script_v2/#argument)保留 String 与 plugin Object 类型。当前只绑定唯一声明、带明确布尔默认值的 switch；显式 false 覆盖保持 Boolean。新式响应规则的二进制输入映射为 Uint8Array，完成时按 [QX bodyBytes 接口](https://raw.githubusercontent.com/crossutility/Quantumult-X/master/sample-bytes-rewrite.js)精确输出视图切片。脚本下载接口携带经校验的 `loon` 描述符；没有描述符时不包装。完整原脚本仍在全局执行，初始化位于原指令前缀之后，保留严格模式、顶层声明及 hashbang 的所有行终止形式。
+
+真实上游 Spotify JS 的两类有效 Protobuf 响应分别覆盖四组 tab/useractivity 布尔组合，共八组。使用未修改的原 JS 在 Loon 形式上下文运行，再与生产桥接在 QX 形式上下文运行对照；八组输出字节完全相同、非空且均不同于输入。真实 KOP 另外验证正文阶段和桥接描述符不被改变。此为响应处理层的实用实现；第 23 行跨主机 `url.replace`、第 26 行显式 timeout 仍阻止整份 Spotify 输出，未删掉这些规则。
+
+同次 DIRECT v4 手机结果为 direct=200、默认路由参考=200，但 referencesDistinct=false；显式 proxy 与具体叶子均 fetch-rejected，错误分类 unknown-fetch-error，未带数字 code。五个原请求未执行。当前结论是缺少可区分参考，不能判断原请求 DIRECT；不重复同样校准，也不据此启用 HTTPDNS 转换。叶子取法与 [QX 官方配置 API](https://raw.githubusercontent.com/crossutility/Quantumult-X/master/sample-configuration-api.js)一致；`$task.fetch` 的策略参数与[官方示例](https://raw.githubusercontent.com/crossutility/Quantumult-X/master/sample-fetch-opts-policy.js)一致。原版错误可能包含未覆盖字段，尚未确定手机失败根因。
+
+发布验证：仓库 190 项与任务外部 86 项共 276 项测试通过、零跳过，包含刚下载的原版 Spotify 与 KOP。重新联网检查 11 份插件，9 份完整通过、Spotify 与 HTTPDNS 仍 422；16 个已交付依赖下载、字节核对与语法检查通过。安装订阅与 v1.3.0 原文一致，`adapter.js` 地址无版本后缀。
+
 ## 官方 TF 新变化
 
 ### v1.7.2：MitM 作为默认 QUIC 前提，DIRECT v3 修复代理参考

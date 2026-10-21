@@ -1,8 +1,16 @@
 # Kelee → Quantumult X 适配器
 
-`kelee-qx.js` v1.7.2。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
+`kelee-qx.js` v1.8.0。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
 
 ## 本次支持范围
+
+v1.8.0 加入新式 `response ... then script(...)` 的正文及参数桥接，适用于显式 `requires_body=true`、单个 URL 正则条件及允许下载的 Kelee 脚本。`binary_body_mode=true` 将原生 ArrayBuffer 按精确字节范围作为 Loon 形式的 Uint8Array 传入；返回 Uint8Array 子视图时只输出该视图的范围，不误带前后缓冲区。普通字符串参数保持字符串；插件对象参数仅绑定唯一声明的 Boolean switch，保留默认值与显式 false，不把布尔值改成字符串。
+
+可在原 `/resource?url=...` 后追加 `&args=` 加经过 URL 编码的 JSON 布尔对象覆盖已引用 switch，例如编码前为 `{"tab":false,"useractivity":true}`；不传时沿用插件默认值。未知或未引用的参数整体报错，不静默忽略。当前不适配 select/input、字符串模板、Raw String、请求阶段的正文桥接或显式 timeout。旧式脚本声明的执行选项限制保持原样。
+
+桥接只在带描述符的本机脚本地址上启用，未选中的脚本仍原样下载。原脚本保持顶层执行，保留严格模式与全局声明；不会通过包裹函数改变顶层变量作用域。TF 953 手机已确认桥接所需的全局绑定可替换、脚本标识符同步更新及二进制输入可用。真实 Spotify 原版脚本在两类有效 Protobuf 响应、四组开关组合下，桥接输出与 Loon 形式运行的输出逐字节相等，并且都确实修改了输入。这证明响应处理层的适配，不代表整份 Spotify 插件或 App 内效果已通过。
+
+这层仅转换正文、参数及基础响应结果，不提供完整 Loon API。未支持的返回字段保留原响应并记录原因；原脚本自身异常继续由宿主引擎处理。它不修改请求的匹配条件、地址、策略或发送次数。二进制接口依据为 [QX 官方示例](https://raw.githubusercontent.com/crossutility/Quantumult-X/master/sample-bytes-rewrite.js)，参数类型依据为 [Loon Script](https://nsloon.app/en/docs/Script/script_v2/#argument)。
 
 v1.7.2 默认 `CONFIG.quicMode = 'mitm'`：依赖 QX 已有的 MitM 相关 QUIC 自动拦截，**不再要求全局禁用 QUIC**。保持 QX MitM 和相应资源启用，沿用原插件的 hostname，不为 QUIC 扩大 TCP 的解密范围。[官方说明](https://t.me/QuanXNews/302)及[旧版 Google QUIC 支持](https://t.me/QuanXNews/399)。
 
@@ -33,7 +41,7 @@ v1.7.0 加入两叶 `AND(URL-REGEX, USER-AGENT) → REJECT` 的通用编译，�
 - 域名与 `PROTOCOL, QUIC` 的交集：默认按上述现有 MitM 方案放宽，可选全局模式；严格模式仍拒绝，未声称三种行为等价。
 - `URL-REGEX` 与 `USER-AGENT` 的 DIRECT/PROXY 组合、嵌套混合条件及超出上述 UA 范围的规则仍未适配；`url-and-header` 不自行赋予原请求 DIRECT 策略。
 - `NOT`、其他谓词、额外标记、未验证策略：整体拒绝并报告缺口。
-- Spotify：跨主机 `url.replace` 尚无已验证的 QX 等价实现，插件继续整体返回 HTTP 422。手机 TF 953 测试中，只改 URL 和 URL＋Host 两种写法均返回 404；后者显示目标 URL 形态仍不代表连接已经迁移。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。带参数二进制脚本、超时及全 spotify.com 后缀的 QUIC 组合也未完成等价适配。
+- Spotify：跨主机 `url.replace` 与显式 `timeout=5` 尚无已验证的完整等价实现，插件继续整体返回 HTTP 422。手机 TF 953 测试中，只改 URL 和 URL＋Host 两种写法均返回 404；后者显示目标 URL 形态仍不代表连接已经迁移。未删除规则、改成 302 或通过 `$task.fetch` 重发请求。v1.8.0 已实现带布尔参数的二进制响应处理层；其 QUIC 条目沿用上述已获授权的放宽。
 
 v1.6.0 的 HTTP 200 / incomplete 仍会让解析器跳过逻辑。本次已复现 HTTPDNS 的 DIRECT 例外丢失后落入更宽 REJECT 的反例，因此改成整体 422，响应带有 `X-Kelee-QX-Conversion: rejected`。QX 日志和错误正文记录 `pendingLogical`、插件、来源、原始行号、原因及脱敏规则摘要。后端拒绝不完整替换，不承诺客户端遇到更新失败后的缓存行为。
 
@@ -57,4 +65,6 @@ TF 变化、仍在维护的脚本及等价性分析见[研究记录](compatibili
 node --test QX/tests/*.test.cjs
 ```
 
-仓库内测试使用独立 AST 求值器和输出 glob 求值器对照，包括关键词重叠、后缀边界、空交集、策略与顺序、预算、原子拒绝、TF 备注、旧式声明、日志脱敏、原始行号、稳定安装订阅及探针边界。本轮另用上游真实 KOP 在模拟 TF 953 环境验证 11 份最新资源与 14 个交付脚本依赖。测试不等同于手机实机验收。
+仓库内测试使用独立 AST 求值器和输出 glob 求值器对照，包括关键词重叠、后缀边界、空交集、策略与顺序、预算、原子拒绝、TF 备注、旧式声明、日志脱敏、原始行号、稳定安装订阅及探针边界。桥接测试额外覆盖精确视图、空正文、类型、全局作用域、指令前缀、参数覆盖和资产下载链路。
+
+设置 `KELEE_KOP_SOURCE` 为真实 KOP 文件路径，可运行解析器链路测试；设置 `KELEE_SPOTIFY_SOURCE` 为刚下载的原版 Spotify JS 路径，可运行八组 Protobuf 字节对照，不将第三方脚本复制进仓库。本轮本地验证同时启用二者。测试不等同于手机 App 内验收。
