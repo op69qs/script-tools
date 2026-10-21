@@ -49,6 +49,19 @@ test('finite errors retain only safe categories and explicit numeric codes',asyn
   assert.equal(report.referenceDiagnostics.policyErrorCode,-1200);
   assert.ok(!JSON.stringify(report).match(/PRIVATE|192\.0\.2/));
 });
+
+test('string, documented error objects and Error.message all retain only a finite category',async()=>{
+  for(const [reason,category] of [
+    ['PRIVATE_NODE connection timeout 192.0.2.11','timeout'],
+    [{error:'PRIVATE_NODE invalid policy 192.0.2.11'},'policy-or-node'],
+    [new Error('PRIVATE_NODE certificate rejected 192.0.2.11'),'tls']
+  ]) {
+    const {report}=await run('calibration',{fetcher:async()=>{throw reason;}});
+    assert.equal(report.referenceDiagnostics.policyErrorCategory,category);
+    assert.equal(report.referenceDiagnostics.policyErrorCode,null);
+    assert.ok(!JSON.stringify(report).match(/PRIVATE|192\.0\.2/));
+  }
+});
 test('the current subscription uses v4 at the same diagnostic page URL',()=>{
   const body=fs.readFileSync(path.join(folder,'policy-probe.snippet'),'utf8');
   assert.equal(body.split('\n').filter(line=>line.includes(' url ') && line.includes('/direct-policy-v4.js')).length,3);

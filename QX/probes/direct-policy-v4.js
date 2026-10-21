@@ -108,12 +108,17 @@
   function fetchReferences(pinned) {
     var target='https://httpbin.org/anything/kelee-qx-direct-probe-reference';
     function failure(reason) {
-      var text=typeof reason==='string'?reason:reason && typeof reason.error==='string'?reason.error:'';
+      var text='',code=null;
+      try {
+        text=typeof reason==='string'?reason:reason && typeof reason.error==='string'?reason.error:
+          reason && typeof reason.message==='string'?reason.message:'';
+      } catch(_) {}
+      try {if(reason && typeof reason.code==='number' && isFinite(reason.code) && reason.code%1===0)code=reason.code;}
+      catch(_) {}
       var category=/tls|ssl|certificate|证书/i.test(text)?'tls':
         /timeout|timed out|超时/i.test(text)?'timeout':
           /unknown policy|invalid policy|no (?:such )?(?:policy|server)|(?:node|policy|server)\s+not found|找不到.*(?:策略|节点)/i.test(text)?'policy-or-node':
             /connect|refused|unreachable|network|连接|网络/i.test(text)?'connection':'unknown-fetch-error';
-      var code=reason && typeof reason.code==='number' && isFinite(reason.code) && reason.code%1===0?reason.code:null;
       return {status:0,origin:'',outcome:'fetch-rejected',errorCategory:category,errorCode:code};
     }
     function one(route) {
