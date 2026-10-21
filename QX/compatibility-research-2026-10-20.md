@@ -4,9 +4,17 @@
 
 ## 继续处理完整 Spotify / HTTPDNS
 
+### v6：在受控分流下测试 HTTP 原请求策略
+
+用户确认一键临时测试分流导入后，在 filter 模式按普通 HTTP 地址检查 httpbingo.org 时，活动显示经过代理。当前已有普通请求的代理前提，但仍需验证探针自己的 control。新增固定 HTTP/80 的 v6，现有测试订阅只切换三条 DIRECT hooks，不扩大 MitM；旧 v5 只保留清理入口。主适配器和生产策略未改。
+
+已用真实服务完成桌面解析链路验证：DIRECT 参考、带 marker 的独立 GET、生产响应 hook、专用记录清理均通过。真实服务的单值数组头与 GET/HTTP URL 回显得到识别，测试样本已把 origin 改为 TEST-NET 地址并移除其他原头部。桌面发送的两个测试请求不验证 QX 路由，也不代表手机原请求重发。旧版全局订阅断言由 v6 的严格入口边界测试取代，历史运行时测试保留。
+
+服务 origin 是回显参考而非独立连接证明；实现来源头优先级见 [go-httpbin helpers](https://raw.githubusercontent.com/mccutchen/go-httpbin/main/httpbin/helpers.go)。客户端已存在可能影响 origin 的头时保留原请求并标为不确定。只有唯一 marker、GET、200、准确 HTTP URL、稳定对照和前后参考均成立时，才分别判断 policy/opts 的本次观察；报告始终不宣称完整等价。HTTPDNS 的原 IP URL、百分号 UA 和匹配优先级仍待后续验证，Spotify 跨主机与 timeout 也未解决。
+
 手机已确认后端版本 1.8.0；现有 v5 模式读取返回 `runningMode: all_proxy`、DIRECT FETCH 200。该模式下 calibration 不建立参考，所以 `directReferenceAvailable: false` 不表示 DIRECT 失败，也没有执行两个原请求策略 payload。用户报告普通 HTTP httpbingo.org 在全局模式经过代理，手填临时 host 后恢复 filter 则为 DIRECT；原因尚未确定，不再只归因于 httpbin，也不假定手工规则实际已经装载。
 
-新增独立测试分流文件及官方 `add-resource`/`filter_remote` 一键入口，仅追加 `host, httpbingo.org, proxy`，内置 proxy 选择不变，测试结束删除此订阅。`force-policy=proxy` 固定该资源策略，`opt-parser=false` 避免解析器变量；`inserted-resource=true` 不承诺相对所有其他插入资源的绝对优先级。仍须在 filter 模式下确认普通 HTTP 新请求实际经过代理；确认前不发布 v6、不改 HTTPDNS 的原始 IP/URL/UA 策略。
+此前新增独立测试分流文件及官方 `add-resource`/`filter_remote` 一键入口，仅追加 `host, httpbingo.org, proxy`，内置 proxy 选择不变，测试结束删除此订阅。`force-policy=proxy` 固定该资源策略，`opt-parser=false` 避免解析器变量；`inserted-resource=true` 不承诺相对所有其他插入资源的绝对优先级。当时先等待 filter 模式普通 HTTP 请求的代理确认；现已收到确认，按上面的 v6 继续，HTTPDNS 的原始 IP/URL/UA 策略尚未改动。
 
 重新联网验证当前 11 份上游与真实 KOP：9 份转换通过、Spotify 和 HTTPDNS 仍 422，16 份依赖下载及语法通过。RedPaper 21 条、PinDuoDuo 29 条重写及其余规则按原有授权处理；截图中的旧 422 不能单独定位手机当前资源更新的失败原因。安装订阅仍与 v1.3.0 一致，adapter.js 地址没有版本号。
 

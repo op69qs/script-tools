@@ -3,9 +3,11 @@ hostname = httpbin.org
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/(?:dashboard|calibration)$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/request\?mode=(?:control|policy|opts-policy)&id=qx953-p1-[0-9]{8,20}$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-policy-probe/request\?mode=(?:control|policy|opts-policy)&id=qx953-p1-[0-9]{8,20}$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/policy-probe.js
-# Native browser egress versus explicit DIRECT; fresh script path separates older probes.
-^(?:http://httpbin\.org(?::80)?|https://httpbin\.org(?::443)?)/anything/kelee-qx-direct-probe/(?:dashboard|(?:calibration|verify|cleanup)\?id=qx953-d2-[0-9]{13}-[0-9]{8})$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v5.js
-^(?:http://httpbin\.org(?::80)?|https://httpbin\.org(?::443)?)/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d2-[0-9]{13}-[0-9]{8}-[0-4]$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v5.js
-^(?:http://httpbin\.org(?::80)?|https://httpbin\.org(?::443)?)/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d2-[0-9]{13}-[0-9]{8}-[0-4]$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v5.js
+# v6: fixed HTTP service with a user-verified proxy route in filter mode; no new MitM hosts.
+^http://httpbingo\.org(?::80)?/anything/kelee-qx-direct-probe/(?:dashboard|(?:calibration|verify|cleanup)\?id=qx953-d6-[0-9]{13}-[0-9]{8})$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v6.js
+^http://httpbingo\.org(?::80)?/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d6-[0-9]{13}-[0-9]{8}-[0-4]$ url script-request-header https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v6.js
+^http://httpbingo\.org(?::80)?/anything/kelee-qx-direct-probe/request\?mode=(?:control|policy-direct|opts-direct)&id=qx953-d6-[0-9]{13}-[0-9]{8}-[0-4]$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v6.js
+# Retain only historical v5 cleanup; old dashboards and policy requests are no longer active.
+^(?:http://httpbin\.org(?::80)?|https://httpbin\.org(?::443)?)/anything/kelee-qx-direct-probe/cleanup\?id=qx953-d2-[0-9]{13}-[0-9]{8}$ url script-echo-response https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/direct-policy-v5.js
 # Response bridge host capability check. This fixed GET is never replayed.
 ^https://httpbin\.org(?::443)?/anything/kelee-qx-response-runtime-probe$ url script-response-body https://raw.githubusercontent.com/op69qs/script-tools/main/QX/probes/response-runtime-v1.js

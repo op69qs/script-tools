@@ -1,0 +1,25 @@
+{
+  "args": {
+    "mode": [
+      "control"
+    ],
+    "id": [
+      "qx953-d6-1792559000000-12345678-0"
+    ]
+  },
+  "headers": {
+    "Host": [
+      "httpbingo.org"
+    ],
+    "X-Kelee-Qx-Direct-Probe": [
+      "qx953-d6-1792559000000-12345678-0"
+    ]
+  },
+  "method": "GET",
+  "origin": "198.51.100.10",
+  "url": "http://httpbingo.org/anything/kelee-qx-direct-probe/request?mode=control&id=qx953-d6-1792559000000-12345678-0",
+  "data": "",
+  "files": {},
+  "form": {},
+  "json": null
+}

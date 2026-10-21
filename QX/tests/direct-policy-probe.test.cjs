@@ -184,14 +184,3 @@ test('already-direct and failed controls never prove a native DIRECT capability'
     assert.equal(report.assessment['opts-direct'],'inconclusive');
   }
 });
-test('the updated existing subscription covers all DIRECT test paths and rejects extra parameters',()=>{
-  const snippet=fs.readFileSync(path.join(__dirname,'..','probes','policy-probe.snippet'),'utf8');
-  const rules=snippet.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.includes('kelee-qx-direct-probe/')&&l.includes(' url '));
-  assert.equal(rules.length,3);
-  for(const u of [base+'/dashboard',base+'/calibration?id='+runId,base+'/verify?id='+runId,
-    base+'/cleanup?id='+runId,endpoint('control'),endpoint('policy-direct'),endpoint('opts-direct')])
-    assert.ok(rules.some(l=>new RegExp(l.split(' url ')[0]).test(u)),u);
-  for(const u of [base+'/dashboard?extra=1',endpoint('control')+'&extra=1',base+'/cleanup?id=other'])
-    assert.ok(!rules.some(l=>new RegExp(l.split(' url ')[0]).test(u)),u);
-  assert.ok(rules.every(l=>/\/direct-policy-v[2345]\.js$/.test(l)));
-});

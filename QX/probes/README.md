@@ -4,9 +4,19 @@
 
 ## DIRECT 原请求补测
 
-### 当前先做：一键导入临时代理对照
+### 当前：HTTP httpbingo v6
 
-手机已确认后端 1.8.0，现有模式接口返回 all_proxy。用户报告 httpbingo.org 普通 HTTP 请求在全局模式走代理，但手工临时 host 规则在 filter 模式仍为 DIRECT。现在先核实受控导入的分流是否生效，不运行完整 v5，也不据此发布 v6 或放行 HTTPDNS。
+用户已确认一键临时分流导入后，filter 模式下按普通 HTTP 地址检查 httpbingo.org 时经过代理。现在更新现有 policy-probe.snippet（资源解析器关闭），保持该临时分流和分流模式，用 Safari 打开 [v6 HTTP 测试页面](http://httpbingo.org/anything/kelee-qx-direct-probe/dashboard)，点开始；出现 finished: true 后复制完整报告。报告开头应为 kelee-qx-direct-policy-browser-v6。不需要重装主脚本。
+
+v6 只匹配固定 httpbingo.org 的 HTTP/80 专用路径，不增加 MitM hostname；HTTPS 升级或跳转不算本次有效观察。它读取服务回显的 origin 作为出口参考，不宣称该字段独立证明 TCP 对端或完整策略路径。[go-httpbin 实现](https://raw.githubusercontent.com/mccutchen/go-httpbin/main/httpbin/helpers.go)可能优先使用平台或转发头，因此发送前若已有这些客户端头部，原请求不加被测策略，观察标为不确定；服务在响应中回显的平台新增头不会单独触发污染判断。
+
+状态 200、准确 HTTP URL、GET 回显和唯一 marker 同时通过才使用参考。固定 HTTP 主机的默认端口 :80 统一处理；IPv6 先规范化，IPv4 拒绝前导零，同一地址的不同写法不会建立不同出口参考。Go 头部值只接受字符串或恰有一个字符串的数组，重复大小写字段、多元素数组或格式异常保持不确定。原 Host、UA、Accept 等不改，测试原请求不经 FETCH 重发。独立 DIRECT FETCH 仅建立前后参考，并带本 run/phase 标记校验；只有初始 control 可区分、三条 control 的参考编号稳定、前后 DIRECT 参考稳定及模式为 filter，才分别解释两个被测 payload。报告使用 referenceKind: service-origin-echo、provesFullEquivalence: false；不输出 origin、原始头部、正文或存储盐/token。
+
+失败的初始化会清除本次 pending；正常页面结束调用该 run 的 cleanup，迟到结果不恢复记录。旧 v5 仅保留 cleanup hook，旧 dashboard 和策略请求不再启用；旧手动读取留下的专用记录仍可用相同 runId 清理。v6 得到正结果后仍需核实 HTTPDNS 原 IP URL、编码 UA、条件交集及优先级，不能直接放行整份资源。Spotify 的跨主机和 timeout 不由此测试解决。
+
+### 临时代理对照的一键入口
+
+手机已确认后端 1.8.0，现有模式接口曾返回 all_proxy。按普通 HTTP 地址检查 httpbingo.org 时，全局模式经过代理，手工临时 host 规则在 filter 模式曾为 DIRECT；随后下述受控导入方式在 filter 模式建立了普通请求代理对照。它不能反推此前手填规则未生效的具体原因。
 
 1. 点击[添加临时测试分流](https://quantumult.app/x/open-app/add-resource?remote-resource=%7B%22filter_remote%22%3A%5B%22https%3A%2F%2Fraw.githubusercontent.com%2Fop69qs%2Fscript-tools%2Fmain%2FQX%2Fprobes%2Fhttpbingo-proxy.filter%2C%20tag%3DKelee-QX%20DIRECT%20%E4%B8%B4%E6%97%B6%E6%B5%8B%E8%AF%95%2C%20force-policy%3Dproxy%2C%20inserted-resource%3Dtrue%2C%20opt-parser%3Dfalse%2C%20enabled%3Dtrue%22%5D%7D)，在 QX 确认添加名称为“Kelee-QX DIRECT 临时测试”的资源。它属于**分流引用**，只有 `host, httpbingo.org, proxy`，不需要资源解析器。
 2. 保持分流模式，用 Safari 打开[普通 HTTP 对照](http://httpbingo.org/get?kelee_qx_route_check=20261020import)，查看这次新记录是否经过代理。无需复制网页正文。
@@ -18,7 +28,7 @@
 
 ### v5 实现与历史操作
 
-现有脚本仍为 v5；当前先执行上面的临时分流对照，以下保留实现与历史操作说明。v5 报告开头为 `kelee-qx-direct-policy-browser-v5`；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试。
+以下为历史 v5 说明；当前按上面的 v6 步骤操作。v5 完整测试 hooks 已停用，仅保留旧 run 的 cleanup；旧 `/kelee-qx-policy-probe/dashboard` 是 REJECT 测试。
 
 已收到 HTTP v5 手机结果：control-0 正常回显，但与 DIRECT 参考相同；用户随后在该条活动中确认最终策略为 DIRECT。两种被测 DIRECT 参数尚未执行，不能据此判断它们有效或无效。先查看同一条 `/request?mode=control`、编号末尾 `-0` 记录的**命中规则及最终策略链**，不要查看本地生成的 dashboard 或本来就指定 DIRECT 的 `direct-probe-reference`。规则未生效前不重复整套测试。
 

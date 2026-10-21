@@ -2,13 +2,12 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const file=path.join(__dirname,'../probes/direct-policy-v5.js');
 const base='https://httpbin.org/anything/kelee-qx-direct-probe',id='qx953-d2-1792542000000-12345678';
 const key='kelee-qx.direct-policy.v5.https.'+id;
-test('the active subscription uses only v5 for all three DIRECT hooks',()=>{
-  const snippet=fs.readFileSync(path.join(__dirname,'../probes/policy-probe.snippet'),'utf8');
-  const rules=snippet.split(/\r?\n/).map(line=>line.trim()).filter(line=>line.includes('/kelee-qx-direct-probe/') && line.includes(' url '));
-  assert.equal(rules.length,3);assert.ok(rules.every(line=>line.endsWith('/direct-policy-v5.js')));
-  const patterns=rules.map(line=>new RegExp(line.split(' url ')[0]));
-  for(const origin of ['http://httpbin.org','http://httpbin.org:80','https://httpbin.org','https://httpbin.org:443'])
-    assert.ok(patterns.some(pattern=>pattern.test(origin+'/anything/kelee-qx-direct-probe/dashboard')));
+test('historical v5 still serves its fixed HTTP and HTTPS dashboards',()=>{
+  for(const origin of ['http://httpbin.org','http://httpbin.org:80','https://httpbin.org','https://httpbin.org:443']){
+    let result;vm.runInNewContext(source(),{$request:{method:'GET',url:origin+'/anything/kelee-qx-direct-probe/dashboard'},
+      $done:value=>result=value});
+    assert.ok(result.body.includes('kelee-qx-direct-policy-browser-v5'));
+  }
 });
 function source(){assert.ok(fs.existsSync(file),'native-reference probe v5 has not been implemented');return fs.readFileSync(file,'utf8');}
 function harness({prefs=new Map(),mode='filter',fetcher}={}) {
