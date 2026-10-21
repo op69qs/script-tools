@@ -2,6 +2,12 @@
 
 `kelee-qx.js` v1.8.0。以用户使用的 TF 1.9.0（953）为本轮研究与解析器验证基准。继续使用现有本机后端与订阅地址；`remoteSnippet()` 和它引用的 `adapter.js` 地址保持不变，不追加版本号。
 
+## Spotify / HTTPDNS 原生替代资源
+
+可合并的两条完整订阅和安装步骤见 [native-resources.txt](native-resources.txt)：Spotify 使用 app2smile 的原生 QX 重写，HTTPDNS 使用 blackmatrix7 的 63 条原生域名/IP 分流并指定 `force-policy=reject`。两项均关闭资源解析器，先停用对应 Kelee 订阅，避免旧缓存和重复规则冲突。TXT 是配置片段，不覆盖整份主配置。
+
+HTTPDNS 的拦截范围与 Kelee 不同，不含原通用路径重写；按用户已确认的选择，两条嘀嗒 URL＋UA 请求由现有分流决定出口。Spotify 已通过依赖、原生行格式及 QX API 模拟样例核对，但 Spotify 9.1.90.2269 的实机效果尚待确认；[作者仓库近期仍有 QX 跳歌反馈](https://github.com/app2smile/rules/issues/274)。原生版不含 Kelee 的 tab/useractivity 开关，也未重现跨主机改写和显式超时行为。本替代方案不改变适配器的严格转换边界。
+
 ## 本次支持范围
 
 v1.8.0 加入新式 `response ... then script(...)` 的正文及参数桥接，适用于显式 `requires_body=true`、单个 URL 正则条件及允许下载的 Kelee 脚本。`binary_body_mode=true` 将原生 ArrayBuffer 按精确字节范围作为 Loon 形式的 Uint8Array 传入；返回 Uint8Array 子视图时只输出该视图的范围，不误带前后缓冲区。普通字符串参数保持字符串；插件对象参数仅绑定唯一声明的 Boolean switch，保留默认值与显式 false，不把布尔值改成字符串。

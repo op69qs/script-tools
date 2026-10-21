@@ -1,0 +1,35 @@
+# Spotify / HTTPDNS 原生 Quantumult X 替代资源
+# 核对日期：2026-10-20；设备目标：QX TF 1.9.0 build953。
+# 这是合并用的配置片段，不是完整主配置；不要用它覆盖现有配置。
+# 将下面两条订阅分别加入现有同名区段，不要重复创建区段。
+# 也可在界面添加：Spotify 放“重写资源”；HTTPDNS 放“分流资源”，策略选 reject。
+# 两项均关闭资源解析器；地址栏只填 URL，不要把逗号后的参数粘进地址栏。
+# 启用前停用原 Kelee · Spotify_remove_ads 和 Kelee · Block_HTTPDNS；其他资源照常使用。
+# 若主配置还保留由旧 HTTPDNS 生成的 filter_local/rewrite_local 条目，也需移除对应旧条目。
+# 若此前运行过 DIRECT 探针，停用 policy-probe.snippet 并删除临时 httpbingo 分流。
+
+[rewrite_remote]
+https://raw.githubusercontent.com/app2smile/rules/master/module/spotify.conf, tag=Spotify 原生 QX · app2smile, update-interval=86400, opt-parser=false, enabled=true
+
+[filter_remote]
+https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/QuantumultX/BlockHttpDNS/BlockHttpDNS.list, tag=HTTPDNS 原生 QX · blackmatrix7, force-policy=reject, update-interval=86400, opt-parser=false, enabled=true
+
+# Spotify：先登录，启用这一个 Spotify 重写资源，保持 MitM 开启并信任证书，然后彻底关闭并重开 App。
+# 作者声明：去播放广告、歌手/专辑列表修复、随机播放处理；不支持超高音质。
+# 先将音质设为“高”或“自动”，实际播放一首歌超过 30 秒，再切换一首歌检查是否能持续播放。
+# 已核对 3 条原生重写和 3 个脚本依赖，并在 QX API 模拟环境验证两类 Protobuf 响应、请求头和同主机 URL 修改。
+# 这些结果不证明 Spotify 9.1.90.2269 实机有效；作者仓库 2026 年 9 月仍有 QX 自动跳歌反馈。
+# 这不是 Kelee 插件的逐条等价转换：不含 Kelee 的 tab/useractivity 开关，不重现跨主机改写及 timeout=5。
+# 原生资源自身没有这些转换要求，使用其作者定义的行为。
+# 原作者配置：https://github.com/app2smile/rules/blob/master/module/spotify.conf
+# 使用说明：https://github.com/app2smile/rules/issues/225
+# 播放异常反馈：https://github.com/app2smile/rules/issues/274
+
+# HTTPDNS：使用固定域名/IP 表拦截，当前核对 63 条；不需要脚本或 MitM。
+# force-policy=reject 将上游的 BlockHttpDNS 策略名映射到内置 reject，无需另建策略组。
+# 拦截范围与 Kelee 不同，不包含其通用 IP 路径重写；不是原插件的完整等价替换。
+# 用户已接受：两条嘀嗒 URL+UA 请求不再强制 DIRECT，由现有分流决定出口。
+# 原作者资源：https://github.com/blackmatrix7/ios_rule_script/blob/master/rule/QuantumultX/BlockHttpDNS/BlockHttpDNS.list
+# 仓库活跃不代表这份表最近更新；该表最近提交为 2025-06-17，Spotify 主响应脚本最近提交为 2026-02-25。
+
+# 本次只提供独立原生资源；kelee-qx.js、remoteSnippet() 及 adapter.js 地址均保持不变。
